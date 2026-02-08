@@ -7,13 +7,14 @@ from models.company import Company
 from models.user import User
 from models.transaction import Transaction
 from utils.constants import *
+from utils.formatters import Formatter
 from datetime import datetime
 import config
 
 class TradingService:
     
     # ==========================================
-    # ORDER MANAGEMENT (NEW)
+    # ORDER MANAGEMENT
     # ==========================================
     
     def get_my_orders(self, user_id):
@@ -28,12 +29,8 @@ class TradingService:
         return db.execute_query(query, (user_id,))
 
     def cancel_order(self, order_id, user_id):
-        """
-        Cancel an order and refund remaining shares/money.
-        Does NOT affect shares already traded from this order.
-        """
+        """Cancel an order and refund remaining shares/money"""
         try:
-            # 1. Fetch the order to verify ownership and status
             order = db.execute_query(
                 "SELECT * FROM share_orders WHERE order_id = ? AND user_id = ?", 
                 (order_id, user_id)
@@ -45,20 +42,17 @@ class TradingService:
             order = order[0]
             
             if order['status'] != 'pending':
-                return {'success': False, 'message': 'Cannot cancel completed or already cancelled order'}
+                return {'success': False, 'message': 'Cannot cancel completed order'}
 
-            # 2. Mark as Cancelled
             db.execute_update(
                 "UPDATE share_orders SET status = 'cancelled' WHERE order_id = ?", 
                 (order_id,)
             )
 
-            # 3. Refund Process (Only for remaining quantity)
             remaining_qty = order['quantity']
             
             if remaining_qty > 0:
                 if order['order_type'] == 'buy':
-                    # Refund Money (Remaining Qty * Price)
                     refund_amount = remaining_qty * order['price_per_share']
                     User.get_by_id(user_id).add_funds(
                         refund_amount, 
@@ -66,79 +60,79 @@ class TradingService:
                     )
                     
                 elif order['order_type'] == 'sell':
-                    # Refund Shares
-                    # We need to add shares back to the user's holdings.
-                    # Ideally, we try to preserve the average buy price if the holding still exists.
-                    
+                    # Try to restore holding with original average price
                     holding = db.get_holding(user_id, order['company_id'])
+                    avg_price = holding['average_buy_price'] if holding else order['price_per_share']
                     
-                    if holding:
-                        # Holding exists, use current average price to avoid skewing it
-                        current_avg_price = holding['average_buy_price']
-                        db.add_or_update_holding(
-                            user_id, 
-                            order['company_id'], 
-                            remaining_qty, 
-                            current_avg_price
-                        )
-                    else:
-                        # Holding was fully locked in this order (record deleted), restore it.
-                        # We use the order price as a fallback for 'buy price' since original is lost.
-                        db.add_or_update_holding(
-                            user_id, 
-                            order['company_id'], 
-                            remaining_qty, 
-                            order['price_per_share'] # Fallback
-                        )
+                    db.add_or_update_holding(
+                        user_id, 
+                        order['company_id'], 
+                        remaining_qty, 
+                        avg_price
+                    )
 
             return {
                 'success': True, 
-                'message': f"Order cancelled. {remaining_qty} {'shares' if order['order_type'] == 'sell' else 'credits'} returned."
+                'message': f"Order cancelled. {remaining_qty} units returned."
             }
 
         except Exception as e:
             return {'success': False, 'message': str(e)}
 
     # ==========================================
-    # SMART BUYING & PLACEMENT
+    # BUYING LOGIC (UPDATED)
     # ==========================================
 
-    def smart_buy(self, user_id, company_id, quantity, current_price):
-        """Smart Buy: Tries IPO first. If sold out, places a Market Order."""
+    def process_buy_request(self, user_id, company_id, quantity, bid_price):
+        """
+        Process a user's buy request with a CUSTOM Price.
+        1. Checks if IPO is available (and cheap enough).
+        2. If not, places a Limit Order at the user's Bid Price.
+        """
         company = Company.get_by_id(company_id)
+        current_price = company.share_price
         
-        # 1. Try Buying from IPO
-        if company.available_shares >= quantity:
+        # 1. Try Buying from IPO (Only if Bid >= Current Price)
+        # If you bid ₹90 but stock is ₹100, you can't buy IPO. You must wait for drop.
+        if company.available_shares >= quantity and bid_price >= current_price:
             try:
+                # IPO always sells at Current Price.
+                # If user bid ₹105, they get it for ₹100 (IPO Price). Savings!
                 Share.buy_from_ipo(user_id, company_id, quantity)
                 return {
                     'success': True, 
-                    'message': f"Successfully bought {quantity} shares from IPO!",
+                    'message': f"Success! Bought {quantity} shares from IPO at ₹{current_price} (You saved ₹{bid_price - current_price:.2f}/share)",
                     'type': 'ipo'
                 }
             except Exception as e:
                 return {'success': False, 'message': str(e)}
 
-        # 2. If IPO is full, Place a Buy Order
+        # 2. Place Limit Order
         else:
             user = User.get_by_id(user_id)
-            total_cost = quantity * current_price
+            total_cost = quantity * bid_price
+            
             if user.wallet_balance < total_cost:
-                return {'success': False, 'message': "Insufficient funds for market order."}
+                return {
+                    'success': False, 
+                    'message': f"Insufficient funds. Need {Formatter.format_currency(total_cost)}"
+                }
 
-            return self.create_buy_order(user_id, company_id, quantity, current_price)
-
-    def buy_shares_from_ipo(self, user_id, company_id, quantity):
-        try:
-            Share.buy_from_ipo(user_id, company_id, quantity)
-            return {'success': True, 'message': "Purchase successful"}
-        except Exception as e:
-            return {'success': False, 'message': str(e)}
+            result = self.create_buy_order(user_id, company_id, quantity, bid_price)
+            if result['success']:
+                msg = f"Order Placed for {quantity} shares @ {Formatter.format_currency(bid_price)}."
+                if company.available_shares >= quantity:
+                    msg += "\n(Note: IPO available, but your bid was below current price)"
+                elif bid_price > current_price:
+                    msg += "\n(Priority Bid: Higher chance of matching)"
+                result['message'] = msg
+            return result
 
     def create_buy_order(self, user_id, company_id, quantity, price):
         try:
             total_amount = quantity * price
             user = User.get_by_id(user_id)
+            
             if user.wallet_balance < total_amount:
                 return {'success': False, 'message': "Insufficient funds"}
             
@@ -153,7 +147,7 @@ class TradingService:
             
             return {
                 'success': True, 
-                'message': f"IPO Sold Out.\nPlaced Buy Order for {quantity} shares at ₹{price}.",
+                'message': f"Buy Order Placed.",
                 'type': 'order',
                 'order_id': order_id
             }

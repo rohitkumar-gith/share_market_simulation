@@ -12,7 +12,19 @@ class MarketEngine:
     """Market engine for price calculations and dynamics"""
     
     def __init__(self):
+        # Market Trend State
+        self.trend_type = None # 'bull' or 'bear'
+        self.trend_end_time = datetime.min
+        self.trend_strength = 0.0
+        
         self._initialize_dummy_history()
+
+    def set_market_trend(self, trend_type, duration_seconds, strength=0.005):
+        """Set a sustained market trend (Bull/Bear)"""
+        self.trend_type = trend_type
+        self.trend_strength = strength
+        self.trend_end_time = datetime.now() + timedelta(seconds=duration_seconds)
+        print(f"Market Trend Set: {trend_type.upper()} for {duration_seconds}s")
 
     def _initialize_dummy_history(self):
         """Creates fake 24h history if database is empty"""
@@ -27,7 +39,6 @@ class MarketEngine:
             
             for company in companies:
                 base_price = company.share_price
-                # Create a random trend
                 trend = random.choice([-1, 1]) * random.uniform(0.01, 0.05)
                 start_price = base_price * (1 - trend) 
                 
@@ -47,17 +58,14 @@ class MarketEngine:
             print(f"Error initializing history: {e}")
 
     def calculate_dynamic_price(self, company_id):
-        """
-        Calculate price based on REAL trades (VWAP).
-        If trades happen below current price, price goes DOWN.
-        If trades happen above current price, price goes UP.
-        """
+        """Calculate price based on VWAP + Active Market Trends"""
         company = Company.get_by_id(company_id)
         if not company: return None
         
         current_price = company.share_price
+        new_price = current_price
         
-        # 1. Fetch the last 20 trades for this company
+        # --- 1. Base Logic (VWAP) ---
         query = """
             SELECT price_per_share, quantity 
             FROM transactions 
@@ -67,35 +75,34 @@ class MarketEngine:
         trades = db.execute_query(query, (company_id,))
         
         if not trades:
-            # No recent trades? Random Drift (Stagnant Market)
-            drift = random.uniform(-0.01, 0.01) # +/- 1%
+            # Random Drift if no trades
+            drift = random.uniform(-0.005, 0.005)
             new_price = current_price * (1 + drift)
         else:
-            # 2. Calculate VWAP (Volume Weighted Average Price)
-            total_value = 0
-            total_volume = 0
-            
-            for t in trades:
-                total_value += (t['price_per_share'] * t['quantity'])
-                total_volume += t['quantity']
+            total_value = sum(t['price_per_share'] * t['quantity'] for t in trades)
+            total_volume = sum(t['quantity'] for t in trades)
             
             if total_volume > 0:
                 vwap = total_value / total_volume
-                
-                # 3. Pull Current Price towards VWAP
-                # If Market is ₹100 but you sold at ₹80, VWAP drops, pulling price down.
-                convergence_factor = 0.2  # Price moves 20% of the way towards trade price per update
-                
+                convergence = 0.2
                 gap = vwap - current_price
-                new_price = current_price + (gap * convergence_factor)
+                new_price = current_price + (gap * convergence)
                 
-                # 4. Add small noise for realism
-                noise = random.uniform(-0.005, 0.005) # +/- 0.5%
+                noise = random.uniform(-0.005, 0.005)
                 new_price = new_price * (1 + noise)
-            else:
-                new_price = current_price
 
-        # Limits (Don't let it go below ₹0.10)
+        # --- 2. Apply Admin Market Trend (The Fix) ---
+        if datetime.now() < self.trend_end_time:
+            # Apply sustained pressure every tick
+            if self.trend_type == 'bull':
+                # Force upward movement (e.g. +0.5% to +1.5% per tick)
+                boost = random.uniform(0.005, 0.015) 
+                new_price = new_price * (1 + boost)
+            elif self.trend_type == 'bear':
+                # Force downward movement
+                drop = random.uniform(0.005, 0.015)
+                new_price = new_price * (1 - drop)
+
         return round(max(0.10, new_price), 2)
     
     def update_all_prices(self):
@@ -105,16 +112,13 @@ class MarketEngine:
         for company in companies:
             new_price = self.calculate_dynamic_price(company.company_id)
             if new_price and new_price != company.share_price:
-                # Save history
                 db.execute_insert("INSERT INTO price_history (company_id, price, recorded_at) VALUES (?, ?, ?)", 
                                 (company.company_id, new_price, datetime.now()))
-                # Update company
                 company.update_share_price(new_price)
                 updated_count += 1
         return {'updated_count': updated_count}
     
     def get_price_change(self, company_id, hours=24):
-        """Get price change data"""
         company = Company.get_by_id(company_id)
         current_price = company.share_price if company else 0
         cutoff_time = datetime.now() - timedelta(hours=hours)
@@ -141,7 +145,6 @@ class MarketEngine:
         }
 
     def get_price_history(self, company_id, limit=100):
-        """Fetch history for charts"""
         results = db.execute_query("""
             SELECT price, recorded_at as timestamp 
             FROM price_history WHERE company_id = ? ORDER BY recorded_at ASC LIMIT ?

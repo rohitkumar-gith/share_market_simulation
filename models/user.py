@@ -1,285 +1,146 @@
 """
-User Model - Represents a user in the system
+User Model
 """
 import bcrypt
-from datetime import datetime
 from database.db_manager import db
-from utils.validators import Validator
-
+import config
 
 class User:
-    """User model with authentication and wallet management"""
-    
-    def __init__(self, user_id=None, username=None, email=None, full_name=None, 
-                 wallet_balance=0.0, created_at=None, last_login=None):
+    def __init__(self, user_id, username, email, full_name, wallet_balance, is_admin=0):
         self.user_id = user_id
         self.username = username
         self.email = email
         self.full_name = full_name
         self.wallet_balance = wallet_balance
-        self.created_at = created_at
-        self.last_login = last_login
-    
+        self.is_admin = bool(is_admin)
+
     @classmethod
-    def from_dict(cls, data):
-        """Create User instance from dictionary"""
-        if not data:
+    def from_db_row(cls, row):
+        """Create User object from database row"""
+        if not row:
             return None
+        
+        try:
+            is_admin_val = row['is_admin']
+        except Exception:
+            is_admin_val = 0
+
         return cls(
-            user_id=data.get('user_id'),
-            username=data.get('username'),
-            email=data.get('email'),
-            full_name=data.get('full_name'),
-            wallet_balance=data.get('wallet_balance', 0.0),
-            created_at=data.get('created_at'),
-            last_login=data.get('last_login')
+            user_id=row['user_id'],
+            username=row['username'],
+            email=row['email'],
+            full_name=row['full_name'],
+            wallet_balance=row['wallet_balance'],
+            is_admin=is_admin_val
         )
-    
-    def to_dict(self):
-        """Convert User to dictionary"""
-        return {
-            'user_id': self.user_id,
-            'username': self.username,
-            'email': self.email,
-            'full_name': self.full_name,
-            'wallet_balance': self.wallet_balance,
-            'created_at': self.created_at,
-            'last_login': self.last_login
-        }
-    
+
+    # ==========================
+    # AUTH METHODS
+    # ==========================
+
     @staticmethod
-    def hash_password(password):
-        """Hash password using bcrypt"""
-        return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-    
+    def login(username, password):
+        """Authenticate user"""
+        rows = db.execute_query("SELECT * FROM users WHERE username = ?", (username,))
+        if not rows:
+            raise ValueError("User not found")
+        
+        row = rows[0]
+        stored_hash = row['password_hash']
+        
+        if bcrypt.checkpw(password.encode('utf-8'), stored_hash.encode('utf-8')):
+            return User.from_db_row(row)
+        else:
+            raise ValueError("Invalid password")
+
     @staticmethod
-    def verify_password(password, hashed_password):
-        """Verify password against hash"""
-        return bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
-    
-    @classmethod
-    def register(cls, username, password, email, full_name):
-        """Register a new user"""
-        # Validation
-        if not Validator.validate_username(username):
-            raise ValueError("Invalid username. Must be 3-20 alphanumeric characters.")
+    def register(username, password, email, full_name):
+        """Register new user"""
+        if User.get_by_username(username):
+            raise ValueError("Username already exists")
+            
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         
-        if not Validator.validate_password(password):
-            raise ValueError("Password must be at least 6 characters long.")
-        
-        if not Validator.validate_email(email):
-            raise ValueError("Invalid email format.")
-        
-        if not full_name or len(full_name.strip()) < 2:
-            raise ValueError("Full name must be at least 2 characters.")
-        
-        # Check if username exists
-        if db.get_user_by_username(username):
-            raise ValueError("Username already exists.")
-        
-        # Hash password and create user
-        password_hash = cls.hash_password(password)
-        user_id = db.create_user(username, password_hash, email, full_name.strip())
-        
-        # Fetch and return created user
-        user_data = db.get_user_by_id(user_id)
-        return cls.from_dict(user_data)
-    
-    @classmethod
-    def login(cls, username, password):
-        """Authenticate user and return User instance"""
-        user_data = db.get_user_by_username(username)
-        
-        if not user_data:
-            raise ValueError("Invalid username or password.")
-        
-        if not cls.verify_password(password, user_data['password_hash']):
-            raise ValueError("Invalid username or password.")
-        
-        # Update last login
-        db.update_last_login(user_data['user_id'])
-        
-        return cls.from_dict(user_data)
-    
-    @classmethod
-    def get_by_id(cls, user_id):
-        """Get user by ID"""
-        user_data = db.get_user_by_id(user_id)
-        return cls.from_dict(user_data)
-    
-    @classmethod
-    def get_by_username(cls, username):
-        """Get user by username"""
-        user_data = db.get_user_by_username(username)
-        return cls.from_dict(user_data)
+        query = """
+            INSERT INTO users (username, password_hash, email, full_name, wallet_balance, is_admin)
+            VALUES (?, ?, ?, ?, ?, 0)
+        """
+        try:
+            user_id = db.execute_insert(
+                query, 
+                (username, hashed.decode('utf-8'), email, full_name, config.INITIAL_USER_BALANCE)
+            )
+            return User.get_by_id(user_id)
+        except Exception as e:
+            raise ValueError(f"Registration failed: {str(e)}")
+
+    # ==========================
+    # DATA METHODS
+    # ==========================
     
     def refresh(self):
-        """Refresh user data from database"""
-        user_data = db.get_user_by_id(self.user_id)
-        if user_data:
-            self.__dict__.update(self.from_dict(user_data).__dict__)
-    
-    def get_wallet_balance(self):
-        """Get current wallet balance"""
-        self.refresh()
-        return self.wallet_balance
-    
-    def update_wallet_balance(self, new_balance):
-        """Update wallet balance"""
-        db.update_user_balance(self.user_id, new_balance)
-        self.wallet_balance = new_balance
-    
-    def add_funds(self, amount, description="Deposit"):
-        """Add funds to wallet"""
-        if amount <= 0:
-            raise ValueError("Amount must be positive.")
+        updated = User.get_by_id(self.user_id)
+        if updated:
+            self.wallet_balance = updated.wallet_balance
+            self.is_admin = updated.is_admin
+
+    @staticmethod
+    def get_by_id(user_id):
+        row = db.execute_query("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        return User.from_db_row(row[0]) if row else None
+
+    @staticmethod
+    def get_by_username(username):
+        row = db.execute_query("SELECT * FROM users WHERE username = ?", (username,))
+        return User.from_db_row(row[0]) if row else None
         
-        new_balance = self.wallet_balance + amount
-        self.update_wallet_balance(new_balance)
-        
-        # Record transaction
-        from utils.constants import WALLET_DEPOSIT
-        db.add_wallet_transaction(
-            self.user_id,
-            WALLET_DEPOSIT,
-            amount,
-            new_balance,
-            description
-        )
-        
-        return new_balance
-    
-    def withdraw_funds(self, amount, description="Withdrawal"):
-        """Withdraw funds from wallet"""
-        if amount <= 0:
-            raise ValueError("Amount must be positive.")
-        
-        if amount > self.wallet_balance:
-            raise ValueError("Insufficient funds.")
-        
-        new_balance = self.wallet_balance - amount
-        self.update_wallet_balance(new_balance)
-        
-        # Record transaction
-        from utils.constants import WALLET_WITHDRAWAL
-        db.add_wallet_transaction(
-            self.user_id,
-            WALLET_WITHDRAWAL,
-            amount,
-            new_balance,
-            description
-        )
-        
-        return new_balance
-    
-    def transfer_to_user(self, recipient_user_id, amount, description=None):
-        """Transfer money to another user"""
-        if amount <= 0:
-            raise ValueError("Amount must be positive.")
-        
-        if self.user_id == recipient_user_id:
-            raise ValueError("Cannot transfer to yourself.")
-        
-        if amount > self.wallet_balance:
-            raise ValueError("Insufficient funds.")
-        
-        # Get recipient
-        recipient = User.get_by_id(recipient_user_id)
-        if not recipient:
-            raise ValueError("Recipient not found.")
-        
-        # Deduct from sender
-        new_sender_balance = self.wallet_balance - amount
-        self.update_wallet_balance(new_sender_balance)
-        
-        # Add to recipient
-        new_recipient_balance = recipient.wallet_balance + amount
-        recipient.update_wallet_balance(new_recipient_balance)
-        
-        # Record transactions
-        from utils.constants import WALLET_TRANSFER_OUT, WALLET_TRANSFER_IN
-        
-        db.add_wallet_transaction(
-            self.user_id,
-            WALLET_TRANSFER_OUT,
-            amount,
-            new_sender_balance,
-            description or f"Transfer to {recipient.username}",
-            recipient_user_id
-        )
-        
-        db.add_wallet_transaction(
-            recipient_user_id,
-            WALLET_TRANSFER_IN,
-            amount,
-            new_recipient_balance,
-            description or f"Transfer from {self.username}",
-            self.user_id
-        )
-        
-        return new_sender_balance
-    
-    def get_wallet_transactions(self, limit=50):
-        """Get wallet transaction history"""
-        return db.get_wallet_transactions(self.user_id, limit)
-    
     def get_portfolio(self):
-        """Get user's share portfolio"""
+        """Get user portfolio (holdings)"""
         holdings = db.get_user_holdings(self.user_id)
         
-        total_invested = 0
-        total_current_value = 0
-        
-        for holding in holdings:
-            invested = holding['total_invested']
-            current_value = holding['quantity'] * holding['share_price']
-            
-            holding['current_value'] = current_value
-            holding['profit_loss'] = current_value - invested
-            holding['profit_loss_percent'] = ((current_value - invested) / invested * 100) if invested > 0 else 0
-            
-            total_invested += invested
-            total_current_value += current_value
+        # Calculate totals
+        total_invested = sum(h['total_invested'] for h in holdings)
+        total_current_value = sum(h['current_value'] for h in holdings)
+        total_profit_loss = total_current_value - total_invested
         
         return {
             'holdings': holdings,
             'total_invested': total_invested,
             'total_current_value': total_current_value,
-            'total_profit_loss': total_current_value - total_invested,
-            'total_profit_loss_percent': ((total_current_value - total_invested) / total_invested * 100) if total_invested > 0 else 0
+            'total_profit_loss': total_profit_loss
         }
-    
-    def get_transaction_history(self, limit=50):
-        """Get user's transaction history"""
-        return db.get_user_transactions(self.user_id, limit)
-    
-    def get_companies_owned(self):
-        """Get companies owned by this user"""
-        return db.get_companies_by_owner(self.user_id)
-    
+
     def get_active_loans(self):
-        """Get user's active loans"""
-        loans = db.get_user_loans(self.user_id)
-        return [loan for loan in loans if loan['status'] == 'active']
-    
-    def get_total_debt(self):
-        """Get total outstanding debt"""
-        active_loans = self.get_active_loans()
-        return sum(loan['remaining_balance'] for loan in active_loans)
-    
+        """Get all active loans for this user (MISSING METHOD ADDED)"""
+        return db.get_user_loans(self.user_id)
+
     def get_net_worth(self):
-        """Calculate user's net worth"""
+        """Calculate total net worth (wallet + portfolio - loans)"""
         portfolio = self.get_portfolio()
-        total_debt = self.get_total_debt()
+        assets_value = portfolio['total_current_value']
         
-        net_worth = self.wallet_balance + portfolio['total_current_value'] - total_debt
+        # Subtract loan debt
+        loans = self.get_active_loans()
+        debt = sum(l['remaining_balance'] for l in loans)
         
-        return {
-            'wallet_balance': self.wallet_balance,
-            'portfolio_value': portfolio['total_current_value'],
-            'total_debt': total_debt,
-            'net_worth': net_worth
-        }
-    
-    def __repr__(self):
-        return f"<User(id={self.user_id}, username='{self.username}', balance={self.wallet_balance})>"
+        return (self.wallet_balance + assets_value) - debt
+        
+    def add_funds(self, amount, description="Deposit"):
+        if amount <= 0: return False
+        
+        new_balance = self.wallet_balance + amount
+        db.execute_update("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (new_balance, self.user_id))
+        db.add_wallet_transaction(self.user_id, 'DEPOSIT', amount, new_balance, description)
+        
+        self.wallet_balance = new_balance
+        return True
+        
+    def withdraw_funds(self, amount, description="Withdrawal"):
+        if amount <= 0 or self.wallet_balance < amount: return False
+        
+        new_balance = self.wallet_balance - amount
+        db.execute_update("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (new_balance, self.user_id))
+        db.add_wallet_transaction(self.user_id, 'WITHDRAW', amount, new_balance, description)
+        
+        self.wallet_balance = new_balance
+        return True

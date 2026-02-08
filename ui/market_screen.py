@@ -1,5 +1,5 @@
 """
-Market Screen - Buy and Sell Shares (Updated for Smart Buy & Charts)
+Market Screen - Buy and Sell Shares (Updated for Custom Pricing)
 """
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt
@@ -11,6 +11,68 @@ from models.company import Company
 from utils.formatters import Formatter
 from ui.chart_window import ChartWindow
 import config
+
+class BuyOrderDialog(QDialog):
+    """Custom Dialog to enter Quantity and Price"""
+    def __init__(self, company, parent=None):
+        super().__init__(parent)
+        self.company = company
+        self.setWindowTitle(f"Buy {company.ticker_symbol}")
+        self.setFixedWidth(300)
+        self.init_ui()
+        
+    def init_ui(self):
+        layout = QVBoxLayout()
+        
+        # Info Header
+        info_layout = QFormLayout()
+        info_layout.addRow("Current Price:", QLabel(Formatter.format_currency(self.company.share_price)))
+        info_layout.addRow("Available (IPO):", QLabel(str(self.company.available_shares)))
+        layout.addLayout(info_layout)
+        
+        layout.addWidget(QLabel("<b>Place Order</b>"))
+        
+        # Inputs
+        form = QFormLayout()
+        
+        self.qty_spin = QSpinBox()
+        self.qty_spin.setRange(1, 1000000)
+        self.qty_spin.setValue(10)
+        self.qty_spin.valueChanged.connect(self.update_total)
+        form.addRow("Quantity:", self.qty_spin)
+        
+        self.price_spin = QDoubleSpinBox()
+        self.price_spin.setRange(0.10, 1000000.00)
+        # Default to Current + 2% for priority, but let user change it
+        default_price = round(self.company.share_price * 1.02, 2)
+        self.price_spin.setValue(default_price)
+        self.price_spin.setSingleStep(0.10)
+        self.price_spin.valueChanged.connect(self.update_total)
+        form.addRow("Bid Price (₹):", self.price_spin)
+        
+        layout.addLayout(form)
+        
+        # Total
+        self.total_lbl = QLabel("Total: ₹0.00")
+        self.total_lbl.setFont(QFont('Arial', 11, QFont.Bold))
+        self.total_lbl.setAlignment(Qt.AlignRight)
+        layout.addWidget(self.total_lbl)
+        
+        # Buttons
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+        
+        self.setLayout(layout)
+        self.update_total()
+        
+    def update_total(self):
+        total = self.qty_spin.value() * self.price_spin.value()
+        self.total_lbl.setText(f"Total: {Formatter.format_currency(total)}")
+        
+    def get_data(self):
+        return self.qty_spin.value(), self.price_spin.value()
 
 class MarketScreen(QWidget):
     """Market screen for trading shares"""
@@ -96,25 +158,18 @@ class MarketScreen(QWidget):
         chart.exec_()
 
     def buy_shares(self, company):
-        """Handle buy shares"""
-        user = auth_service.get_current_user()
-        max_can_afford = int(user.wallet_balance / company.share_price)
-        default_qty = min(10, max_can_afford)
-        
-        quantity, ok = QInputDialog.getInt(
-            self, "Buy Shares",
-            f"Price: {Formatter.format_currency(company.share_price)}\n"
-            f"Available in IPO: {company.available_shares}\n\n"
-            f"Enter quantity:",
-            default_qty, 1, 1000000, 1
-        )
-        
-        if ok and quantity > 0:
-            result = trading_service.smart_buy(
+        """Open Buy Dialog"""
+        dialog = BuyOrderDialog(company, self)
+        if dialog.exec_() == QDialog.Accepted:
+            quantity, bid_price = dialog.get_data()
+            user = auth_service.get_current_user()
+            
+            # Call updated process_buy_request with custom price
+            result = trading_service.process_buy_request(
                 user.user_id, 
                 company.company_id, 
                 quantity, 
-                company.share_price
+                bid_price
             )
             
             if result['success']:
