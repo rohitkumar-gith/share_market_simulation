@@ -23,20 +23,13 @@ class ChatScreen(QWidget):
         # Header
         header = QLabel("Global Trader Chat")
         header.setFont(QFont('Arial', 20, QFont.Bold))
+        header.setStyleSheet(f"color: {config.COLOR_ACCENT}; margin-bottom: 10px;")
         layout.addWidget(header)
         
         # Message Display Area
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
-        self.chat_display.setStyleSheet("""
-            QTextEdit {
-                background-color: white;
-                border: 1px solid #bdc3c7;
-                border-radius: 5px;
-                padding: 10px;
-                font-size: 14px;
-            }
-        """)
+        # Removed hardcoded style - uses global theme now
         layout.addWidget(self.chat_display)
         
         # Input Area
@@ -45,7 +38,6 @@ class ChatScreen(QWidget):
         self.msg_input = QLineEdit()
         self.msg_input.setPlaceholderText("Type a message...")
         self.msg_input.returnPressed.connect(self.send_message)
-        self.msg_input.setStyleSheet("padding: 10px; border-radius: 5px; border: 1px solid #bdc3c7;")
         input_layout.addWidget(self.msg_input)
         
         send_btn = QPushButton("Send")
@@ -57,7 +49,6 @@ class ChatScreen(QWidget):
         self.setLayout(layout)
         
     def setup_timer(self):
-        # Poll for new messages every 2 seconds
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_messages)
         self.timer.start(2000)
@@ -66,23 +57,21 @@ class ChatScreen(QWidget):
     def refresh_messages(self):
         messages = chat_service.get_recent_messages()
         
-        # Simple HTML formatting
         html = ""
         for msg in messages:
             time_str = msg['created_at'].strftime("%H:%M")
-            user_color = config.COLOR_PRIMARY
+            user_color = "#5DADE2" 
             
-            # Highlight own messages
             current_user = auth_service.get_current_user()
             if current_user and msg['username'] == current_user.username:
                 user_color = config.COLOR_SUCCESS
                 
-            html += f"<p><span style='color:#95a5a6; font-size:10px;'>[{time_str}]</span> "
+            # Use distinct colors for username/message to stand out on dark bg
+            html += f"<p style='margin: 4px 0;'><span style='color:#7f8c8d; font-size:11px;'>[{time_str}]</span> "
             html += f"<span style='color:{user_color}; font-weight:bold;'>{msg['username']}:</span> "
-            html += f"{msg['message']}</p>"
+            html += f"<span style='color:#E0E0E0;'>{msg['message']}</span></p>"
             
         self.chat_display.setHtml(html)
-        # Scroll to bottom
         sb = self.chat_display.verticalScrollBar()
         sb.setValue(sb.maximum())
 

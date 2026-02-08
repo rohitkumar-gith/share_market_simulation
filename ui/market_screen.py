@@ -18,7 +18,7 @@ class BuyOrderDialog(QDialog):
         super().__init__(parent)
         self.company = company
         self.setWindowTitle(f"Buy {company.ticker_symbol}")
-        self.setFixedWidth(300)
+        self.setFixedWidth(350)
         self.init_ui()
         
     def init_ui(self):
@@ -43,8 +43,7 @@ class BuyOrderDialog(QDialog):
         
         self.price_spin = QDoubleSpinBox()
         self.price_spin.setRange(0.10, 1000000.00)
-        # Default to Current + 2% for priority, but let user change it
-        default_price = round(self.company.share_price * 1.02, 2)
+        default_price = self.company.share_price
         self.price_spin.setValue(default_price)
         self.price_spin.setSingleStep(0.10)
         self.price_spin.valueChanged.connect(self.update_total)
@@ -93,10 +92,14 @@ class MarketScreen(QWidget):
         self.companies_table = QTableWidget()
         self.companies_table.setColumnCount(8)
         self.companies_table.setHorizontalHeaderLabels([
-            "Ticker", "Company", "Price", "24h Change", "Available", "Market Cap", "Chart", "Actions"
+            "Ticker", "Company", "Price", "24h Change", "Available", "Market Cap", "Analysis", "Trade"
         ])
         self.companies_table.horizontalHeader().setStretchLastSection(True)
         self.companies_table.setAlternatingRowColors(True)
+        
+        # Ensure rows are tall enough for buttons
+        self.companies_table.verticalHeader().setDefaultSectionSize(50)
+        
         layout.addWidget(self.companies_table)
         
         self.setLayout(layout)
@@ -121,11 +124,11 @@ class MarketScreen(QWidget):
             change_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             
             if change_percent > 0:
-                change_item.setForeground(Qt.darkGreen)
+                change_item.setForeground(Qt.green)
             elif change_percent < 0:
                 change_item.setForeground(Qt.red)
             else:
-                change_item.setForeground(Qt.black)
+                change_item.setForeground(Qt.lightGray)
             self.companies_table.setItem(row, 3, change_item)
 
             avail_item = QTableWidgetItem(Formatter.format_number(company.available_shares))
@@ -136,16 +139,16 @@ class MarketScreen(QWidget):
             cap_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.companies_table.setItem(row, 5, cap_item)
             
-            # Chart Button
-            chart_btn = QPushButton("📈")
-            chart_btn.setToolTip("View Price Chart")
-            chart_btn.setStyleSheet("background-color: #3498DB; color: white; font-weight: bold;")
+            # Chart Button (Updated to Text)
+            chart_btn = QPushButton("View Chart")
+            chart_btn.setToolTip("Open Price History")
+            chart_btn.setStyleSheet("background-color: #3498DB; color: white; border-radius: 4px; padding: 5px;")
             chart_btn.clicked.connect(lambda checked, c=company: self.show_chart(c))
             self.companies_table.setCellWidget(row, 6, chart_btn)
 
-            # Buy Button
-            buy_btn = QPushButton("Buy")
-            buy_btn.setStyleSheet(f"background-color: {config.COLOR_SUCCESS}; color: white;")
+            # Buy Button (Updated to Text)
+            buy_btn = QPushButton("Buy Share")
+            buy_btn.setStyleSheet(f"background-color: {config.COLOR_SUCCESS}; color: white; border-radius: 4px; padding: 5px;")
             buy_btn.clicked.connect(lambda checked, c=company: self.buy_shares(c))
             self.companies_table.setCellWidget(row, 7, buy_btn)
         
@@ -164,7 +167,6 @@ class MarketScreen(QWidget):
             quantity, bid_price = dialog.get_data()
             user = auth_service.get_current_user()
             
-            # Call updated process_buy_request with custom price
             result = trading_service.process_buy_request(
                 user.user_id, 
                 company.company_id, 

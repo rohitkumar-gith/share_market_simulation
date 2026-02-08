@@ -37,15 +37,25 @@ BOT_MAX_TRADE_AMOUNT = 5000
 PRICE_VOLATILITY_FACTOR = 0.05
 DEMAND_IMPACT_FACTOR = 0.02
 
-# UI Colors
-COLOR_PRIMARY = "#2C3E50"
-COLOR_SECONDARY = "#3498DB"
-COLOR_SUCCESS = "#27AE60"
-COLOR_DANGER = "#E74C3C"
-COLOR_WARNING = "#F39C12"
-COLOR_BACKGROUND = "#ECF0F1"
-COLOR_TEXT = "#2C3E50"
+# --- MODERN DARK THEME COLORS ---
+# Backgrounds
+COLOR_BACKGROUND = "#121212"      # Very dark gray (Main BG)
+COLOR_SURFACE    = "#1E1E1E"      # Slightly lighter (Cards/Panels)
+COLOR_PRIMARY    = "#2C2C2C"      # Sidebar/Top bar
 
-# Formatting Settings (FIX ADDED HERE)
+# Accents
+COLOR_ACCENT     = "#3498DB"      # Bright Blue (Primary Actions)
+COLOR_SECONDARY  = "#BB86FC"      # Purple (Secondary Actions)
+
+# Status Colors
+COLOR_SUCCESS    = "#00C853"      # Vibrant Green
+COLOR_DANGER     = "#CF6679"      # Soft Red
+COLOR_WARNING    = "#FFB74D"      # Orange
+
+# Text
+COLOR_TEXT       = "#E0E0E0"      # Off-white
+COLOR_TEXT_DIM   = "#A0A0A0"      # Gray text
+
+# Formatting Settings
 CURRENCY_SYMBOL = "₹"
 DATE_DISPLAY_FORMAT = "%Y-%m-%d %H:%M"
