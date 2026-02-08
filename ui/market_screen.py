@@ -10,6 +10,7 @@ from trading.market_engine import market_engine
 from models.company import Company
 from utils.formatters import Formatter
 from ui.chart_window import ChartWindow
+from database.db_manager import db
 import config
 
 class BuyOrderDialog(QDialog):
@@ -82,12 +83,17 @@ class MarketScreen(QWidget):
     
     def init_ui(self):
         """Initialize the UI"""
-        layout = QVBoxLayout()
-        layout.setContentsMargins(20, 20, 20, 20)
+        # Main Horizontal Layout (Split Screen)
+        main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(20)
+        
+        # --- LEFT COLUMN: MARKET TABLE ---
+        left_layout = QVBoxLayout()
         
         title = QLabel("Market - Buy & Sell Shares")
         title.setFont(QFont('Arial', 24, QFont.Bold))
-        layout.addWidget(title)
+        left_layout.addWidget(title)
         
         self.companies_table = QTableWidget()
         self.companies_table.setColumnCount(8)
@@ -96,17 +102,47 @@ class MarketScreen(QWidget):
         ])
         self.companies_table.horizontalHeader().setStretchLastSection(True)
         self.companies_table.setAlternatingRowColors(True)
-        
-        # Ensure rows are tall enough for buttons
         self.companies_table.verticalHeader().setDefaultSectionSize(50)
         
-        layout.addWidget(self.companies_table)
+        left_layout.addWidget(self.companies_table)
         
-        self.setLayout(layout)
+        # Add Left Column to Main (Flex 2/3)
+        main_layout.addLayout(left_layout, 2)
+        
+        # --- RIGHT COLUMN: RECENT ACTIVITY ---
+        right_layout = QVBoxLayout()
+        
+        activity_title = QLabel("Recent Activity")
+        activity_title.setFont(QFont('Arial', 18, QFont.Bold))
+        right_layout.addWidget(activity_title)
+        
+        self.activity_list = QListWidget()
+        self.activity_list.setStyleSheet("""
+            QListWidget {
+                background-color: #1E1E1E;
+                border: 1px solid #333;
+                border-radius: 8px;
+            }
+            QListWidget::item {
+                padding: 10px;
+                border-bottom: 1px solid #333;
+                color: #DDD;
+            }
+        """)
+        right_layout.addWidget(self.activity_list)
+        
+        # Add Right Column to Main (Flex 1/3)
+        main_layout.addLayout(right_layout, 1)
+        
+        self.setLayout(main_layout)
         self.refresh_data()
     
     def refresh_data(self):
-        """Refresh market data"""
+        """Refresh market data and activity feed"""
+        self.refresh_table()
+        self.refresh_activity()
+        
+    def refresh_table(self):
         companies = Company.get_all()
         self.companies_table.setRowCount(len(companies))
         
@@ -139,21 +175,46 @@ class MarketScreen(QWidget):
             cap_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.companies_table.setItem(row, 5, cap_item)
             
-            # Chart Button (Updated to Text)
+            # Chart Button
             chart_btn = QPushButton("View Chart")
             chart_btn.setToolTip("Open Price History")
             chart_btn.setStyleSheet("background-color: #3498DB; color: white; border-radius: 4px; padding: 5px;")
             chart_btn.clicked.connect(lambda checked, c=company: self.show_chart(c))
             self.companies_table.setCellWidget(row, 6, chart_btn)
 
-            # Buy Button (Updated to Text)
+            # Buy Button
             buy_btn = QPushButton("Buy Share")
             buy_btn.setStyleSheet(f"background-color: {config.COLOR_SUCCESS}; color: white; border-radius: 4px; padding: 5px;")
             buy_btn.clicked.connect(lambda checked, c=company: self.buy_shares(c))
             self.companies_table.setCellWidget(row, 7, buy_btn)
         
         self.companies_table.resizeColumnsToContents()
-    
+
+    def refresh_activity(self):
+        """Fetch and display recent trades"""
+        trades = db.get_recent_market_trades(limit=20)
+        self.activity_list.clear()
+        
+        if not trades:
+            self.activity_list.addItem("No recent activity.")
+            return
+            
+        for trade in trades:
+            time_str = trade['created_at'].strftime("%H:%M:%S")
+            ticker = trade['ticker_symbol']
+            qty = trade['quantity']
+            price = trade['price_per_share']
+            buyer = trade['buyer_name']
+            
+            # Construct message
+            text = f"[{time_str}] {buyer} bought {qty} {ticker} @ ₹{price}"
+            
+            item = QListWidgetItem(text)
+            
+            # Color code bots differently maybe? Or just keep it clean.
+            # Using simple white/gray for now.
+            self.activity_list.addItem(item)
+
     def show_chart(self, company):
         """Open chart window for company"""
         history = market_engine.get_price_history(company.company_id)

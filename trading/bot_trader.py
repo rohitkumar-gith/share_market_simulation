@@ -114,7 +114,13 @@ class BotTrader:
     
     def _bot_buy_shares(self, bot_user, companies, strategy):
         """Bot buys shares - PRIORITIZING USER SELL ORDERS"""
-        company = self._select_company_to_buy(companies, strategy)
+        # Select target from list
+        target_in_list = self._select_company_to_buy(companies, strategy)
+        if not target_in_list: return False
+        
+        # --- FIX: FORCE FRESH DB FETCH ---
+        # This ensures we get the Admin-updated price immediately, not the cached one
+        company = Company.get_by_id(target_in_list.company_id)
         if not company or company.share_price <= 0: return False
             
         max_affordable = int(bot_user.wallet_balance / company.share_price)
