@@ -43,18 +43,17 @@ class AdminService:
         except Exception as e:
             return {'success': False, 'message': str(e)}
             
-    def trigger_market_event(self, event_type, duration_minutes=2):
-        """Trigger Sustained Market Event (Bull/Bear)"""
-        # 1. Initial Shock (Instant small jump/drop)
+    def trigger_market_event(self, event_type, duration_minutes, target_percent):
+        """
+        Trigger Sustained Market Event (Bull/Bear)
+        target_percent: Percentage change over the duration (e.g. 10 for +10%)
+        """
+        # 1. Initial Shock (Optional - small instant jump to signal start)
         companies = Company.get_all()
         for company in companies:
-            change = 0
-            if event_type == 'bull':
-                change = random.uniform(0.05, 0.10) # Instant 5-10% boost
-            elif event_type == 'bear':
-                change = random.uniform(-0.10, -0.05) # Instant 5-10% drop
-                
-            new_price = company.share_price * (1 + change)
+            # Only small noise to start
+            noise = random.uniform(-0.01, 0.01)
+            new_price = company.share_price * (1 + noise)
             new_price = max(1.0, round(new_price, 2))
             
             # Update DB and History
@@ -62,15 +61,14 @@ class AdminService:
             db.execute_insert("INSERT INTO price_history (company_id, price, recorded_at) VALUES (?, ?, ?)", 
                             (company.company_id, new_price, datetime.now()))
             
-            # --- FIX: FLUSH ORDER BOOK FOR EVERY COMPANY ---
-            # This prevents old orders from reverting the price immediately
+            # Flush Order Book to prevent stale orders matching
             self._flush_order_book(company.company_id)
 
-        # 2. Sustained Trend (Duration based on input)
+        # 2. Set Trend in Engine
         duration_seconds = duration_minutes * 60
-        market_engine.set_market_trend(event_type, duration_seconds)
+        market_engine.set_market_trend(event_type, duration_seconds, target_percent)
             
-        return {'success': True, 'message': f"Market {event_type.upper()} started! (Duration: {duration_minutes} mins). All pending orders flushed."}
+        return {'success': True, 'message': f"Market Trend Started: {target_percent}% over {duration_minutes} mins."}
 
     def manipulate_specific_company(self, company_id, percentage_change):
         """Targeted price manipulation for a single company"""
@@ -149,7 +147,6 @@ class AdminService:
                         )
                     else:
                         # Re-create holding record if it was deleted (sold all)
-                        # Fix for NOT NULL constraint
                         restored_invested = order['quantity'] * order['price_per_share']
                         
                         db.execute_insert(

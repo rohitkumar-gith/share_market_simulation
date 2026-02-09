@@ -6,12 +6,57 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from services.auth_service import auth_service
 from services.trading_service import trading_service
+from services.admin_service import admin_service 
 from trading.market_engine import market_engine
 from models.company import Company
 from utils.formatters import Formatter
 from ui.chart_window import ChartWindow
 from database.db_manager import db
 import config
+
+class MarketTrendDialog(QDialog):
+    """Dialog to manually set market trend"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("⚡ Set Market Trend")
+        self.setFixedWidth(300)
+        self.init_ui()
+        
+    def init_ui(self):
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("<b>Control Market Direction</b>"))
+        
+        form = QFormLayout()
+        
+        self.percent_spin = QDoubleSpinBox()
+        self.percent_spin.setRange(-90.0, 200.0)
+        self.percent_spin.setValue(10.0)
+        self.percent_spin.setSuffix("%")
+        form.addRow("Target Change:", self.percent_spin)
+        
+        self.duration_spin = QSpinBox()
+        self.duration_spin.setRange(1, 60)
+        self.duration_spin.setValue(5)
+        self.duration_spin.setSuffix(" mins")
+        form.addRow("Duration:", self.duration_spin)
+        
+        layout.addLayout(form)
+        
+        # Info
+        self.info_lbl = QLabel("Market will gradually move to target.")
+        self.info_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(self.info_lbl)
+        
+        # Buttons
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+        
+        self.setLayout(layout)
+    
+    def get_data(self):
+        return self.percent_spin.value(), self.duration_spin.value()
 
 class BuyOrderDialog(QDialog):
     """Custom Dialog to enter Quantity and Price"""
@@ -91,9 +136,36 @@ class MarketScreen(QWidget):
         # --- LEFT COLUMN: MARKET TABLE ---
         left_layout = QVBoxLayout()
         
-        title = QLabel("Market - Buy & Sell Shares")
+        # Header with Title, Time Selector, and Trend Button
+        header_layout = QHBoxLayout()
+        
+        title_layout = QVBoxLayout()
+        title = QLabel("Market")
         title.setFont(QFont('Arial', 24, QFont.Bold))
-        left_layout.addWidget(title)
+        subtitle = QLabel("Buy & Sell Shares")
+        subtitle.setStyleSheet("color: #888; font-size: 12px;")
+        title_layout.addWidget(title)
+        title_layout.addWidget(subtitle)
+        header_layout.addLayout(title_layout)
+        
+        header_layout.addStretch()
+        
+        # --- NEW: Timeframe Selector ---
+        self.timeframe_combo = QComboBox()
+        self.timeframe_combo.addItems(["5 Min", "15 Min", "30 Min", "1 Hour", "24 Hours"])
+        self.timeframe_combo.setCurrentIndex(4) # Default to 24h
+        self.timeframe_combo.setFixedWidth(100)
+        self.timeframe_combo.currentIndexChanged.connect(self.refresh_table)
+        header_layout.addWidget(QLabel("View:"))
+        header_layout.addWidget(self.timeframe_combo)
+        
+        # Trend Button
+        self.trend_btn = QPushButton("⚡ Set Trend")
+        self.trend_btn.setStyleSheet("background-color: #8E44AD; color: white; font-weight: bold; padding: 5px 15px;")
+        self.trend_btn.clicked.connect(self.open_trend_dialog)
+        header_layout.addWidget(self.trend_btn)
+        
+        left_layout.addLayout(header_layout)
         
         self.companies_table = QTableWidget()
         self.companies_table.setColumnCount(8)
@@ -146,6 +218,17 @@ class MarketScreen(QWidget):
         companies = Company.get_all()
         self.companies_table.setRowCount(len(companies))
         
+        # Get selected timeframe in hours
+        time_text = self.timeframe_combo.currentText()
+        hours = 24.0
+        if time_text == "5 Min": hours = 5 / 60
+        elif time_text == "15 Min": hours = 15 / 60
+        elif time_text == "30 Min": hours = 30 / 60
+        elif time_text == "1 Hour": hours = 1.0
+        
+        # Update Header Label
+        self.companies_table.setHorizontalHeaderItem(3, QTableWidgetItem(f"{time_text} Change"))
+        
         for row, company in enumerate(companies):
             self.companies_table.setItem(row, 0, QTableWidgetItem(company.ticker_symbol))
             self.companies_table.setItem(row, 1, QTableWidgetItem(company.company_name))
@@ -154,7 +237,8 @@ class MarketScreen(QWidget):
             price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.companies_table.setItem(row, 2, price_item)
             
-            change_data = market_engine.get_price_change(company.company_id, hours=24)
+            # Use dynamic hours
+            change_data = market_engine.get_price_change(company.company_id, hours=hours)
             change_percent = change_data['change_percent']
             change_item = QTableWidgetItem(f"{change_percent:+.2f}%")
             change_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -206,13 +290,10 @@ class MarketScreen(QWidget):
             price = trade['price_per_share']
             buyer = trade['buyer_name']
             
-            # Construct message
+            # Simple standard message
             text = f"[{time_str}] {buyer} bought {qty} {ticker} @ ₹{price}"
             
             item = QListWidgetItem(text)
-            
-            # Color code bots differently maybe? Or just keep it clean.
-            # Using simple white/gray for now.
             self.activity_list.addItem(item)
 
     def show_chart(self, company):
@@ -220,6 +301,21 @@ class MarketScreen(QWidget):
         history = market_engine.get_price_history(company.company_id)
         chart = ChartWindow(company.company_name, history, self)
         chart.exec_()
+    
+    def open_trend_dialog(self):
+        """Open dialog to set market trend"""
+        dialog = MarketTrendDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            percent, duration = dialog.get_data()
+            event_type = 'bull' if percent > 0 else 'bear'
+            
+            # Call Admin Service
+            result = admin_service.trigger_market_event(event_type, duration, percent)
+            
+            if result['success']:
+                QMessageBox.information(self, "Trend Started", result['message'])
+            else:
+                QMessageBox.warning(self, "Error", result['message'])
 
     def buy_shares(self, company):
         """Open Buy Dialog"""

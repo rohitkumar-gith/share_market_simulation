@@ -15,16 +15,31 @@ class MarketEngine:
         # Market Trend State
         self.trend_type = None # 'bull' or 'bear'
         self.trend_end_time = datetime.min
-        self.trend_strength = 0.0
+        self.trend_step_multiplier = 1.0
         
         self._initialize_dummy_history()
 
-    def set_market_trend(self, trend_type, duration_seconds, strength=0.005):
-        """Set a sustained market trend (Bull/Bear)"""
+    def set_market_trend(self, trend_type, duration_seconds, target_percent):
+        """
+        Set a specific market movement target.
+        target_percent: e.g., 10.0 for +10%, -5.0 for -5%
+        """
         self.trend_type = trend_type
-        self.trend_strength = strength
         self.trend_end_time = datetime.now() + timedelta(seconds=duration_seconds)
-        print(f"Market Trend Set: {trend_type.upper()} for {duration_seconds}s")
+        
+        # Calculate Step Multiplier
+        # The market updates every 10 seconds (defined in main_window timers)
+        updates_per_minute = 6
+        total_ticks = (duration_seconds / 60) * updates_per_minute
+        total_ticks = max(1, int(total_ticks))
+        
+        # Target Multiplier (e.g., +10% = 1.10)
+        target_multiplier = 1 + (target_percent / 100.0)
+        
+        # Calculate per-tick multiplier using root: step = target^(1/ticks)
+        self.trend_step_multiplier = target_multiplier ** (1 / total_ticks)
+        
+        print(f"Market Trend Set: {trend_type.upper()} ({target_percent}%) for {duration_seconds}s. Step: {self.trend_step_multiplier:.6f}")
 
     def _initialize_dummy_history(self):
         """Creates fake 24h history if database is empty"""
@@ -75,7 +90,6 @@ class MarketEngine:
         trades = db.execute_query(query, (company_id,))
         
         if not trades:
-            # Random Drift if no trades
             drift = random.uniform(-0.005, 0.005)
             new_price = current_price * (1 + drift)
         else:
@@ -91,17 +105,11 @@ class MarketEngine:
                 noise = random.uniform(-0.005, 0.005)
                 new_price = new_price * (1 + noise)
 
-        # --- 2. Apply Admin Market Trend (The Fix) ---
+        # --- 2. Apply Targeted Market Trend ---
         if datetime.now() < self.trend_end_time:
-            # Apply sustained pressure every tick
-            if self.trend_type == 'bull':
-                # Force upward movement (e.g. +0.5% to +1.5% per tick)
-                boost = random.uniform(0.005, 0.015) 
-                new_price = new_price * (1 + boost)
-            elif self.trend_type == 'bear':
-                # Force downward movement
-                drop = random.uniform(0.005, 0.015)
-                new_price = new_price * (1 - drop)
+            # Apply the calculated geometric step
+            if self.trend_step_multiplier != 1.0:
+                new_price = new_price * self.trend_step_multiplier
 
         return round(max(0.10, new_price), 2)
     
