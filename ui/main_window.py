@@ -236,12 +236,10 @@ class MainWindow(QMainWindow):
                 selection-background-color: {config.COLOR_ACCENT};
             }}
             
-            /* TABS - CRITICAL FIX FOR WHITE COMPANY DASHBOARD */
+            /* TABS */
             QTabWidget::pane {{ border: 1px solid #333; background: {config.COLOR_SURFACE}; border-radius: 6px; }}
             QTabBar::tab {{ background: {config.COLOR_BACKGROUND}; color: #888; padding: 10px 20px; }}
             QTabBar::tab:selected {{ background: {config.COLOR_SURFACE}; color: {config.COLOR_ACCENT}; border-bottom: 2px solid {config.COLOR_ACCENT}; font-weight: bold; }}
-            
-            /* FORCE TAB PAGES TO BE TRANSPARENT (Shows Pane Background) */
             QTabWidget > QWidget {{ background-color: transparent; }}
             
             /* TEXT EDITS */
@@ -260,21 +258,27 @@ class MainWindow(QMainWindow):
         """)
 
     def setup_timers(self):
+        # --- SPEED OPTIMIZATION ---
+        
+        # 1. Market Engine (10s - Price updates)
         self.market_timer = QTimer()
         self.market_timer.timeout.connect(self.update_market_prices)
-        self.market_timer.start(15000) 
+        self.market_timer.start(10000) 
         
+        # 2. Bots (5s - TRADING SPEED INCREASED)
         self.bot_timer = QTimer()
         self.bot_timer.timeout.connect(self.execute_bot_trades)
-        self.bot_timer.start(15000)
+        self.bot_timer.start(5000)
         
+        # 3. Order Matching (5s - MATCHING SPEED INCREASED)
         self.order_timer = QTimer()
         self.order_timer.timeout.connect(self.match_orders)
-        self.order_timer.start(10000)
+        self.order_timer.start(5000)
         
+        # 4. UI Refresh (5s - UI UPDATES FASTER)
         self.ui_timer = QTimer()
         self.ui_timer.timeout.connect(self.refresh_ui_data)
-        self.ui_timer.start(10000)
+        self.ui_timer.start(5000)
     
     def update_market_prices(self):
         try:
