@@ -258,6 +258,14 @@ class MainWindow(QMainWindow):
         """)
 
     def setup_timers(self):
+        # Stop existing timers if they exist to prevent duplicates
+        try:
+            if hasattr(self, 'market_timer'): self.market_timer.stop()
+            if hasattr(self, 'bot_timer'): self.bot_timer.stop()
+            if hasattr(self, 'order_timer'): self.order_timer.stop()
+            if hasattr(self, 'ui_timer'): self.ui_timer.stop()
+        except: pass
+
         # --- SPEED OPTIMIZATION ---
         
         # 1. Market Engine (10s - Price updates)
@@ -374,6 +382,7 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(self, 'Logout', 'Are you sure you want to logout?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             auth_service.logout()
+            # This calls closeEvent -> which STOPS timers
             self.close()
             from ui.auth_screen import AuthScreen
             self.auth_screen = AuthScreen()
@@ -383,6 +392,8 @@ class MainWindow(QMainWindow):
     def on_login_success(self):
         self.update_user_info()
         self.load_screens()
+        # --- FIX: RESTART TIMERS AFTER LOGGING BACK IN ---
+        self.setup_timers()
         self.showMaximized()
     
     def closeEvent(self, event):
