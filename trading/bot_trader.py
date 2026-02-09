@@ -16,12 +16,18 @@ class BotTrader:
     def __init__(self):
         self.bots = []
         self.initialized = False
+        # --- NEW: Realistic Names ---
+        self.bot_names = [
+            "Arjun Mehta", "Priya Sharma", "Rahul Verma", 
+            "Anjali Gupta", "Vikram Singh", "Sneha Patel", "Rohan Das"
+        ]
     
     def initialize_bots(self, count=None):
         """Initialize trading bots"""
         if self.initialized: return
         
-        if count is None: count = config.NUMBER_OF_BOTS
+        # Force count to 7 if not specified
+        if count is None: count = 7
         
         existing_bots = db.execute_query("SELECT * FROM bots")
         if existing_bots:
@@ -34,35 +40,42 @@ class BotTrader:
         created_count = 0
         
         for i in range(count):
-            bot_name = f"TradingBot{i+1}" 
+            # Use realistic name if available, else fallback
+            if i < len(self.bot_names):
+                full_name = self.bot_names[i]
+                username = full_name.replace(" ", "") + "Bot"
+            else:
+                full_name = f"Trader {i+1}"
+                username = f"TradingBot{i+1}"
+            
             strategy = strategies[i % len(strategies)]
             
-            bot_user = User.get_by_username(bot_name)
+            bot_user = User.get_by_username(username)
             if not bot_user:
                 try:
                     bot_user = User.register(
-                        username=bot_name,
-                        password=f"bot_password_{i+1}",
-                        email=f"bot{i+1}@market.sim",
-                        full_name=f"Trading Bot {i+1}"
+                        username=username,
+                        password=f"bot_pass_{i+1}",
+                        email=f"{username.lower()}@market.sim",
+                        full_name=full_name
                     )
                 except Exception as e:
-                    print(f"Error creating user for bot {bot_name}: {e}")
+                    print(f"Error creating user for bot {username}: {e}")
                     continue
             
             try:
                 bot_id = db.execute_insert(
                     """INSERT INTO bots (bot_name, user_id, wallet_balance, strategy, is_active)
                        VALUES (?, ?, ?, ?, ?)""",
-                    (bot_name, bot_user.user_id, config.BOT_INITIAL_BALANCE, strategy, 1)
+                    (full_name, bot_user.user_id, config.BOT_INITIAL_BALANCE, strategy, 1)
                 )
                 self.bots.append({
-                    'bot_id': bot_id, 'bot_name': bot_name, 'user_id': bot_user.user_id,
+                    'bot_id': bot_id, 'bot_name': full_name, 'user_id': bot_user.user_id,
                     'wallet_balance': config.BOT_INITIAL_BALANCE, 'strategy': strategy, 'is_active': 1
                 })
                 created_count += 1
             except Exception as e:
-                print(f"Error initializing bot {bot_name} in DB: {e}")
+                print(f"Error initializing bot {username} in DB: {e}")
         
         self.initialized = True
         print(f"Initialized {created_count} trading bots")
@@ -118,8 +131,7 @@ class BotTrader:
         target_in_list = self._select_company_to_buy(companies, strategy)
         if not target_in_list: return False
         
-        # --- FIX: FORCE FRESH DB FETCH ---
-        # This ensures we get the Admin-updated price immediately, not the cached one
+        # Force Fresh Fetch
         company = Company.get_by_id(target_in_list.company_id)
         if not company or company.share_price <= 0: return False
             
@@ -175,16 +187,15 @@ class BotTrader:
             except: return False
     
     def _bot_sell_shares(self, bot_user, companies, strategy):
-        """Bot Sells Shares - LOOKS FOR HIGH USER BIDS FIRST (NEW GREEDY LOGIC)"""
+        """Bot Sells Shares - LOOKS FOR HIGH USER BIDS FIRST"""
         holdings = db.get_user_holdings(bot_user.user_id)
         if not holdings: return False
         
-        # --- NEW: Check for High User Bids (Profit Opportunity) ---
+        # Check for High User Bids
         for holding in holdings:
             company = Company.get_by_id(holding['company_id'])
             if not company: continue
 
-            # Look for pending BUY orders with Price >= Market Price
             best_buy_order = db.execute_query(
                 "SELECT * FROM share_orders WHERE company_id = ? AND order_type = 'buy' AND status = 'pending' ORDER BY price_per_share DESC LIMIT 1",
                 (company.company_id,)
@@ -194,19 +205,15 @@ class BotTrader:
                 buy_order = best_buy_order[0]
                 buyer_price = buy_order['price_per_share']
                 
-                # If Buyer is offering Market Price OR HIGHER (e.g. You bidding 16 for 11 stock)
                 if buyer_price >= company.share_price:
-                    # Bot sells to this user instantly!
                     sell_qty = min(holding['quantity'], buy_order['quantity'])
-                    
                     try:
                         from services.trading_service import trading_service
-                        # Bot places sell order AT THE BUYER'S PRICE to trigger match
                         trading_service.create_sell_order(bot_user.user_id, company.company_id, sell_qty, buyer_price)
                         return True
                     except: pass
 
-        # --- Standard Random Sell ---
+        # Standard Random Sell
         holding = random.choice(holdings)
         company = Company.get_by_id(holding['company_id'])
         if not company: return False
@@ -214,7 +221,6 @@ class BotTrader:
         sell_percentage = random.uniform(0.1, 0.5)
         quantity = max(1, int(holding['quantity'] * sell_percentage))
         
-        # Sell slightly below market (98% - 100%) to ensure quick match
         price_multiplier = random.uniform(0.98, 1.0)
         sell_price = round(company.share_price * price_multiplier, 2)
         
@@ -230,17 +236,13 @@ class BotTrader:
         if strategy == BOT_STRATEGY_RANDOM: return random.choice(companies)
         elif strategy == BOT_STRATEGY_MOMENTUM:
             sorted_companies = sorted(companies, key=lambda c: c.share_price, reverse=True)
-            # Weighted random favoring top
             weights = [1.0 / (i + 1) for i in range(len(sorted_companies))]
             return random.choices(sorted_companies, weights=weights)[0]
         elif strategy == BOT_STRATEGY_VALUE:
             sorted_companies = sorted(companies, key=lambda c: c.share_price)
-            # Weighted random favoring cheap
             weights = [1.0 / (i + 1) for i in range(len(sorted_companies))]
             return random.choices(sorted_companies, weights=weights)[0]
         return random.choice(companies)
-
-    # --- ADMIN HELPER METHODS (RESTORED) ---
 
     def get_bot_statistics(self):
         """Get statistics for all bots (Used by Admin Panel)"""
