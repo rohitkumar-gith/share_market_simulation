@@ -29,7 +29,13 @@ class WalletScreen(QWidget):
         
         # Balance card
         balance_frame = QFrame()
-        balance_frame.setStyleSheet("background-color: white; border-radius: 10px; padding: 20px;")
+        # --- FIX: REMOVED WHITE ---
+        balance_frame.setStyleSheet(f"""
+            background-color: {config.COLOR_SURFACE}; 
+            border-radius: 10px; 
+            padding: 20px;
+            border: 1px solid #333;
+        """)
         balance_layout = QVBoxLayout()
         
         balance_label = QLabel("Current Balance")
@@ -112,15 +118,12 @@ class WalletScreen(QWidget):
         self.transactions_table.resizeColumnsToContents()
     
     def add_funds(self):
-        """Add funds to wallet"""
         amount, ok = QInputDialog.getDouble(
             self, "Add Funds", "Enter amount to add:", 1000, 1, 1000000, 2
         )
-        
         if ok:
             user = auth_service.get_current_user()
             result = wallet_service.add_funds(user.user_id, amount)
-            
             if result['success']:
                 QMessageBox.information(self, "Success", result['message'])
                 self.refresh_data()
@@ -128,15 +131,12 @@ class WalletScreen(QWidget):
                 QMessageBox.warning(self, "Error", result['message'])
     
     def withdraw_funds(self):
-        """Withdraw funds"""
         amount, ok = QInputDialog.getDouble(
             self, "Withdraw Funds", "Enter amount to withdraw:", 1000, 1, 1000000, 2
         )
-        
         if ok:
             user = auth_service.get_current_user()
             result = wallet_service.withdraw_funds(user.user_id, amount)
-            
             if result['success']:
                 QMessageBox.information(self, "Success", result['message'])
                 self.refresh_data()
@@ -144,21 +144,17 @@ class WalletScreen(QWidget):
                 QMessageBox.warning(self, "Error", result['message'])
     
     def transfer_funds(self):
-        """Transfer funds to another user"""
         username, ok1 = QInputDialog.getText(
             self, "Transfer Funds", "Enter recipient username:"
         )
-        
         if ok1 and username:
             amount, ok2 = QInputDialog.getDouble(
                 self, "Transfer Funds", f"Enter amount to transfer to {username}:",
                 100, 1, 1000000, 2
             )
-            
             if ok2:
                 user = auth_service.get_current_user()
                 result = wallet_service.transfer_funds(user.user_id, username, amount)
-                
                 if result['success']:
                     QMessageBox.information(self, "Success", result['message'])
                     self.refresh_data()

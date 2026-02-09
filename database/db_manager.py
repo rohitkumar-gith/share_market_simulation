@@ -128,7 +128,7 @@ class DBManager:
         return None
         
     def get_company_shareholders(self, company_id):
-        """Get list of shareholders for a company (FIX ADDED HERE)"""
+        """Get list of shareholders for a company"""
         query = """
             SELECT u.username, u.full_name, h.quantity, h.user_id 
             FROM user_holdings h
@@ -226,6 +226,25 @@ class DBManager:
             query, 
             (buyer_id, seller_id, company_id, qty, price, total, txn_type)
         )
+
+    # --- NEW: Get Global Market Activity ---
+    def get_recent_market_trades(self, limit=20):
+        """Get recent trades from the entire market"""
+        query = """
+            SELECT 
+                t.*,
+                c.ticker_symbol,
+                b.username as buyer_name,
+                s.username as seller_name
+            FROM transactions t
+            JOIN companies c ON t.company_id = c.company_id
+            JOIN users b ON t.buyer_id = b.user_id
+            LEFT JOIN users s ON t.seller_id = s.user_id
+            WHERE t.transaction_type = 'trade'
+            ORDER BY t.created_at DESC
+            LIMIT ?
+        """
+        return self.execute_query(query, (limit,))
 
     # ==========================
     # LOANS

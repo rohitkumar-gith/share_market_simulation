@@ -27,7 +27,7 @@ class AdminService:
             return {'success': False, 'message': str(e)}
 
     def edit_master_asset(self, admin_id, asset_id, name, asset_type, price, revenue, supply):
-        """Edit an existing asset (NEW)"""
+        """Edit an existing asset"""
         user = User.get_by_id(admin_id)
         if not user or not user.is_admin:
             return {'success': False, 'message': "Unauthorized"}
@@ -43,30 +43,32 @@ class AdminService:
         except Exception as e:
             return {'success': False, 'message': str(e)}
             
-    def trigger_market_event(self, event_type, duration_minutes=2):
-        """Trigger Sustained Market Event (Bull/Bear)"""
-        # 1. Initial Shock (Instant small jump/drop)
+    def trigger_market_event(self, event_type, duration_minutes, target_percent):
+        """
+        Trigger Sustained Market Event (Bull/Bear)
+        target_percent: Percentage change over the duration (e.g. 10 for +10%)
+        """
+        # 1. Initial Shock (Optional - small instant jump to signal start)
         companies = Company.get_all()
         for company in companies:
-            change = 0
-            if event_type == 'bull':
-                change = random.uniform(0.05, 0.10) # Instant 5-10% boost
-            elif event_type == 'bear':
-                change = random.uniform(-0.10, -0.05) # Instant 5-10% drop
-                
-            new_price = company.share_price * (1 + change)
+            # Only small noise to start
+            noise = random.uniform(-0.01, 0.01)
+            new_price = company.share_price * (1 + noise)
             new_price = max(1.0, round(new_price, 2))
             
             # Update DB and History
             company.update_share_price(new_price)
             db.execute_insert("INSERT INTO price_history (company_id, price, recorded_at) VALUES (?, ?, ?)", 
                             (company.company_id, new_price, datetime.now()))
-
-        # 2. Sustained Trend (Duration based on input)
-        duration_seconds = duration_minutes * 60
-        market_engine.set_market_trend(event_type, duration_seconds)
             
-        return {'success': True, 'message': f"Market {event_type.upper()} started! (Duration: {duration_minutes} mins)"}
+            # Flush Order Book to prevent stale orders matching
+            self._flush_order_book(company.company_id)
+
+        # 2. Set Trend in Engine
+        duration_seconds = duration_minutes * 60
+        market_engine.set_market_trend(event_type, duration_seconds, target_percent)
+            
+        return {'success': True, 'message': f"Market Trend Started: {target_percent}% over {duration_minutes} mins."}
 
     def manipulate_specific_company(self, company_id, percentage_change):
         """Targeted price manipulation for a single company"""
@@ -79,29 +81,83 @@ class AdminService:
             
             # Calculate new price
             multiplier = 1 + (percentage_change / 100.0)
-            
-            # Safety clamp
-            if multiplier < 0.01: multiplier = 0.01
+            if multiplier < 0.01: multiplier = 0.01 # Safety clamp
                 
             new_price = current_price * multiplier
             new_price = max(0.10, round(new_price, 2))
             
-            # Apply update
+            # 1. Apply Price Update
             company.update_share_price(new_price)
             
-            # Record in history
+            # 2. Record in History
             db.execute_insert(
                 "INSERT INTO price_history (company_id, price, recorded_at) VALUES (?, ?, ?)", 
                 (company.company_id, new_price, datetime.now())
             )
             
+            # 3. Flush Order Book
+            self._flush_order_book(company.company_id)
+            
             direction = "increased" if percentage_change > 0 else "decreased"
             return {
                 'success': True, 
-                'message': f"{company.ticker_symbol} {direction} by {abs(percentage_change)}% (₹{current_price} -> ₹{new_price})"
+                'message': f"{company.ticker_symbol} {direction} by {abs(percentage_change)}% (₹{current_price} -> ₹{new_price}). Order book flushed."
             }
         except Exception as e:
             return {'success': False, 'message': str(e)}
+
+    def _flush_order_book(self, company_id):
+        """Cancel all pending orders for a company to force trading at new price"""
+        try:
+            # Get all pending orders
+            orders = db.execute_query(
+                "SELECT * FROM share_orders WHERE company_id = ? AND status = 'pending'", 
+                (company_id,)
+            )
+            
+            if not orders: return
+
+            for order in orders:
+                # Mark as cancelled
+                db.execute_update(
+                    "UPDATE share_orders SET status = 'cancelled' WHERE order_id = ?", 
+                    (order['order_id'],)
+                )
+                
+                # Refund User
+                if order['order_type'] == 'buy':
+                    # Refund Cash
+                    user = User.get_by_id(order['user_id'])
+                    if user:
+                        user.add_funds(order['total_amount'], "Admin Price Reset - Order Cancelled")
+                
+                elif order['order_type'] == 'sell':
+                    # Refund Shares
+                    # Check if holding record exists
+                    holding = db.execute_query(
+                        "SELECT * FROM user_holdings WHERE user_id = ? AND company_id = ?", 
+                        (order['user_id'], company_id)
+                    )
+                    
+                    if holding:
+                        # Add quantity back
+                        db.execute_update(
+                            "UPDATE user_holdings SET quantity = quantity + ? WHERE holding_id = ?",
+                            (order['quantity'], holding[0]['holding_id'])
+                        )
+                    else:
+                        # Re-create holding record if it was deleted (sold all)
+                        restored_invested = order['quantity'] * order['price_per_share']
+                        
+                        db.execute_insert(
+                            "INSERT INTO user_holdings (user_id, company_id, quantity, average_buy_price, total_invested) VALUES (?, ?, ?, ?, ?)",
+                            (order['user_id'], company_id, order['quantity'], order['price_per_share'], restored_invested)
+                        )
+            
+            print(f"Flushed {len(orders)} orders for Company ID {company_id}")
+            
+        except Exception as e:
+            print(f"Error flushing order book: {e}")
 
     def make_user_admin(self, username, secret_key):
         """Backdoor to make yourself admin (Secret Key: 'admin123')"""
