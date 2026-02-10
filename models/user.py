@@ -111,7 +111,7 @@ class User:
         }
 
     def get_active_loans(self):
-        """Get all active loans for this user (MISSING METHOD ADDED)"""
+        """Get all active loans for this user"""
         return db.get_user_loans(self.user_id)
 
     def get_net_worth(self):
@@ -144,3 +144,41 @@ class User:
         
         self.wallet_balance = new_balance
         return True
+
+    # --- NEW METHOD ADDED HERE ---
+    def transfer_to_user(self, recipient_id, amount, description=None):
+        """Transfer funds to another user"""
+        if amount <= 0:
+            raise ValueError("Amount must be positive")
+        
+        if self.wallet_balance < amount:
+            raise ValueError("Insufficient funds")
+            
+        recipient = User.get_by_id(recipient_id)
+        if not recipient:
+            raise ValueError("Recipient not found")
+            
+        # Deduct from sender
+        new_sender_balance = self.wallet_balance - amount
+        db.execute_update("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (new_sender_balance, self.user_id))
+        db.add_wallet_transaction(
+            self.user_id, 
+            'transfer_out', 
+            amount, 
+            new_sender_balance, 
+            description or f"Transfer to {recipient.username}"
+        )
+        self.wallet_balance = new_sender_balance
+        
+        # Add to recipient
+        new_recipient_balance = recipient.wallet_balance + amount
+        db.execute_update("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (new_recipient_balance, recipient.user_id))
+        db.add_wallet_transaction(
+            recipient.user_id, 
+            'transfer_in', 
+            amount, 
+            new_recipient_balance, 
+            description or f"Transfer from {self.username}"
+        )
+        
+        return self.wallet_balance

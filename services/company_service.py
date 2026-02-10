@@ -23,7 +23,7 @@ class CompanyService:
     def get_user_companies(self, user_id):
         """Get companies owned by user"""
         companies = Company.get_by_owner(user_id)
-        return [c.to_dict() for c in companies] # Return as dicts for UI
+        return [c.to_dict() for c in companies]
 
     def get_all_companies(self):
         """Get all companies"""
@@ -34,10 +34,8 @@ class CompanyService:
         """Get detailed company information"""
         try:
             company = Company.get_by_id(company_id)
-            if not company:
-                return None
+            if not company: return None
             
-            # Using AssetService for assets now, but basic list can be fetched here
             shareholders = company.get_shareholders()
             
             return {
@@ -51,11 +49,11 @@ class CompanyService:
             return None
 
     # ==========================
-    # WALLET & FINANCE (UPDATED)
+    # WALLET & FINANCE
     # ==========================
 
     def deposit_to_wallet(self, company_id, user_id, amount):
-        """Owner deposits personal money into company wallet (Renamed from add_company_funds)"""
+        """Owner deposits personal money into company wallet"""
         try:
             company = Company.get_by_id(company_id)
             if company.owner_id != user_id:
@@ -75,7 +73,7 @@ class CompanyService:
                 (company_id, 'DEPOSIT', amount, company.company_wallet, "Owner Investment")
             )
             
-            # Check if bankruptcy can be removed
+            # Bankruptcy Check (Remove if healthy)
             if company.is_bankrupt and company.company_wallet >= 10000:
                 db.execute_update("UPDATE companies SET is_bankrupt = 0 WHERE company_id = ?", (company_id,))
             
@@ -84,7 +82,7 @@ class CompanyService:
             return {'success': False, 'message': str(e)}
 
     def withdraw_from_wallet(self, company_id, user_id, amount):
-        """Owner withdraws money from company wallet (Renamed from withdraw_company_funds)"""
+        """Owner withdraws money from company wallet"""
         try:
             company = Company.get_by_id(company_id)
             if company.owner_id != user_id:
@@ -104,7 +102,7 @@ class CompanyService:
                 (company_id, 'WITHDRAW', amount, company.company_wallet, "Owner Withdrawal")
             )
             
-            # Check Bankruptcy logic
+            # Bankruptcy Check (Add if poor)
             if company.company_wallet < 10000 and not company.is_bankrupt:
                 db.execute_update("UPDATE companies SET is_bankrupt = 1 WHERE company_id = ?", (company_id,))
                 
@@ -116,48 +114,64 @@ class CompanyService:
         """Issue dividend to shareholders"""
         try:
             company = Company.get_by_id(company_id)
-            if not company:
-                return {'success': False, 'message': "Company not found"}
+            if not company: return {'success': False, 'message': "Company not found"}
             
             if company.owner_id != user_id:
                 return {'success': False, 'message': "Only owner can issue dividends"}
             
-            total_payout = amount_per_share * company.total_shares
+            # 1. Calculate Payout (Only on OUTSTANDING shares, not total)
+            shareholders = company.get_shareholders()
+            if not shareholders:
+                return {'success': False, 'message': "No shareholders to pay."}
+
+            outstanding_shares = sum(h['quantity'] for h in shareholders)
+            total_payout = amount_per_share * outstanding_shares
             
+            if total_payout <= 0:
+                return {'success': False, 'message': "Total payout is zero."}
+
             if company.company_wallet < total_payout:
                 return {'success': False, 'message': f"Insufficient funds. Need ₹{total_payout:,.2f}"}
             
-            # Deduct from company wallet
+            # 2. Deduct from Company Wallet
             company.update_wallet(-total_payout)
             
-            # Record Transaction
+            # 3. Record in DIVIDENDS table (History)
+            db.execute_insert(
+                """INSERT INTO dividends (company_id, dividend_per_share, total_amount, payment_date, status)
+                   VALUES (?, ?, ?, CURRENT_TIMESTAMP, 'PAID')""",
+                (company_id, amount_per_share, total_payout)
+            )
+
+            # 4. Record Wallet Transaction
             db.execute_insert(
                 "INSERT INTO company_wallet_transactions (company_id, transaction_type, amount, balance_after, description) VALUES (?, ?, ?, ?, ?)",
-                (company_id, 'DIVIDEND', total_payout, company.company_wallet, f"Dividend: {amount_per_share}/share")
+                (company_id, 'DIVIDEND', total_payout, company.company_wallet, f"Dividend Payout: ₹{amount_per_share}/share")
             )
             
-            # Distribute to shareholders
-            shareholders = company.get_shareholders()
+            # 5. Distribute to Shareholders
+            count = 0
             for holder in shareholders:
                 payout = holder['quantity'] * amount_per_share
-                User.get_by_id(holder['user_id']).add_funds(payout, f"Dividend from {company.company_name}")
+                user = User.get_by_id(holder['user_id'])
+                if user:
+                    user.add_funds(payout, f"Dividend from {company.company_name} ({holder['quantity']} shares)")
+                    count += 1
                 
-            return {'success': True, 'message': "Dividends issued successfully"}
+            return {'success': True, 'message': f"Distributed ₹{total_payout:,.2f} to {count} shareholders."}
         except Exception as e:
             return {'success': False, 'message': str(e)}
 
     # ==========================
-    # DATA & ANALYTICS (RESTORED)
+    # DATA & ANALYTICS
     # ==========================
 
     def get_company_financial_summary(self, company_id):
-        """Get company financial summary (Restored)"""
+        """Get company financial summary"""
         try:
             company = Company.get_by_id(company_id)
-            if not company:
-                return None
+            if not company: return None
             
-            # Get wallet transactions
             query = """
                 SELECT * FROM company_wallet_transactions 
                 WHERE company_id = ? 
@@ -180,20 +194,16 @@ class CompanyService:
             return None
 
     def calculate_ownership_percentage(self, company_id, user_id):
-        """Calculate user's ownership percentage (Restored)"""
+        """Calculate user's ownership percentage"""
         company = Company.get_by_id(company_id)
         if not company: return 0
         
         holding = db.get_holding(user_id, company_id)
         if not holding: return 0
         
-        # Percentage of Issued Shares (excluding what company still holds)
         issued_shares = company.total_shares - company.available_shares
         if issued_shares == 0: return 0
         
         return (holding['quantity'] / issued_shares) * 100
-
-    # Note: add_company_asset was removed. Use AssetService.buy_asset_for_company instead.
-    # Note: update_share_price was removed. Use AdminService or MarketEngine automation.
 
 company_service = CompanyService()
