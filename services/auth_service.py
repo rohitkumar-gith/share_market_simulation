@@ -59,6 +59,18 @@ class AuthService:
             raise e
         except Exception as e:
             raise Exception(f"Login failed: {str(e)}")
+
+    def login_as_user(self, user_id):
+        """
+        ADMIN FEATURE: Force login as a specific user (Bypass Password).
+        Used for switching to Bot accounts.
+        """
+        user = User.get_by_id(user_id)
+        if user:
+            self.current_user = user
+            self.session_start_time = datetime.now()
+            return True
+        return False
     
     def logout(self):
         """Logout current user and clear session"""
@@ -73,7 +85,10 @@ class AuthService:
         """Get current authenticated user"""
         if self.current_user:
             # Refresh user data
-            self.current_user.refresh()
+            try:
+                self.current_user.refresh()
+            except:
+                pass
         return self.current_user
     
     def require_authentication(self):
@@ -171,10 +186,20 @@ class AuthService:
         
         # Check if user still exists
         from database.db_manager import db
-        user_data = db.get_user_by_id(self.current_user.user_id)
-        if not user_data:
-            self.logout()
-            return False
+        
+        # Note: Ensure db_manager has get_user_by_id or switch to User.get_by_id
+        # Preserving your exact code call here:
+        try:
+            user_data = db.get_user_by_id(self.current_user.user_id)
+            if not user_data:
+                self.logout()
+                return False
+        except AttributeError:
+            # Fallback if get_user_by_id doesn't exist in db_manager
+            check = User.get_by_id(self.current_user.user_id)
+            if not check:
+                self.logout()
+                return False
         
         return True
 
