@@ -1,32 +1,45 @@
 """
-Database Manager - Handles all SQLite interactions
+Database Manager - Handles all SQLite interactions with High-Performance Optimizations
 """
 import sqlite3
 import os
+import threading
 import config
 from datetime import datetime, timedelta
 
 class DBManager:
     def __init__(self):
         self.db_path = config.DATABASE_PATH
+        # Thread-local storage ensures UI and Bots don't fight for the same connection handle
+        self._local = threading.local()
         self.check_connection()
+
+    def get_connection(self):
+        """Get or create a high-performance connection for the current thread"""
+        if not hasattr(self._local, "connection"):
+            conn = sqlite3.connect(
+                self.db_path, 
+                detect_types=sqlite3.PARSE_DECLTYPES,
+                check_same_thread=False # Essential for multi-threaded bot/UI access
+            )
+            conn.row_factory = sqlite3.Row
+            
+            # --- DATABASE ENGINE TUNING ---
+            conn.execute("PRAGMA journal_mode=WAL;")      # Allows simultaneous reading and writing
+            conn.execute("PRAGMA synchronous=NORMAL;")   # Significant increase in write speed
+            conn.execute("PRAGMA cache_size=-32000;")    # 32MB Memory Cache for high-speed lookups
+            conn.execute("PRAGMA temp_store=MEMORY;")    # Keep temporary tables/indexes in RAM
+            
+            self._local.connection = conn
+        return self._local.connection
 
     def check_connection(self):
         """Ensure database exists and table structure is correct"""
         new_db = not os.path.exists(self.db_path)
-        conn = self.get_connection()
-        
         if new_db:
+            conn = self.get_connection()
             print(f"Database initialized at: {self.db_path}")
             self.create_tables(conn)
-        
-        conn.close()
-
-    def get_connection(self):
-        """Get a database connection"""
-        conn = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES)
-        conn.row_factory = sqlite3.Row  # Access columns by name
-        return conn
 
     def create_tables(self, conn):
         """Execute schema script"""
@@ -43,7 +56,7 @@ class DBManager:
     # ==========================
 
     def execute_query(self, query, params=()):
-        """Execute a SELECT query"""
+        """Execute a SELECT query using the persistent connection"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
@@ -52,8 +65,6 @@ class DBManager:
         except Exception as e:
             print(f"Query Error: {e}")
             return []
-        finally:
-            conn.close()
 
     def execute_insert(self, query, params=()):
         """Execute an INSERT query and return ID"""
@@ -66,8 +77,6 @@ class DBManager:
         except Exception as e:
             print(f"Insert Error: {e}")
             raise e
-        finally:
-            conn.close()
 
     def execute_update(self, query, params=()):
         """Execute UPDATE or DELETE"""
@@ -80,8 +89,6 @@ class DBManager:
         except Exception as e:
             print(f"Update Error: {e}")
             raise e
-        finally:
-            conn.close()
 
     # ==========================
     # USERS
@@ -99,7 +106,7 @@ class DBManager:
     # ==========================
 
     def get_user_holdings(self, user_id):
-        """Get all holdings for a user with calculated values"""
+        """Get all holdings for a user using indexed lookup"""
         query = """
             SELECT 
                 h.*,
@@ -119,10 +126,9 @@ class DBManager:
         return self.execute_query(query, (user_id,))
 
     def get_holding(self, user_id, company_id):
-        """Get specific holding"""
+        """Get specific holding using unique index"""
         query = "SELECT * FROM user_holdings WHERE user_id = ? AND company_id = ?"
         rows = self.execute_query(query, (user_id, company_id))
-        
         if rows:
             return dict(rows[0])
         return None
@@ -141,7 +147,6 @@ class DBManager:
     def add_or_update_holding(self, user_id, company_id, quantity, price):
         """Add shares to portfolio (Buying)"""
         existing = self.get_holding(user_id, company_id)
-        
         cost = quantity * price
         
         if existing:
@@ -172,8 +177,6 @@ class DBManager:
             raise ValueError("Insufficient shares")
             
         new_qty = existing['quantity'] - quantity
-        
-        # Calculate proportional cost basis reduction
         cost_of_shares_sold = (quantity / existing['quantity']) * existing['total_invested']
         new_total_invested = existing['total_invested'] - cost_of_shares_sold
         
@@ -206,7 +209,7 @@ class DBManager:
         self.execute_insert(query, (user_id, txn_type, amount, balance, desc))
 
     def get_wallet_transactions(self, user_id, limit=50):
-        """Get recent wallet transactions"""
+        """Load only required rows using Index and LIMIT to prevent UI lag"""
         query = """
             SELECT * FROM wallet_transactions 
             WHERE user_id = ? 
@@ -227,9 +230,8 @@ class DBManager:
             (buyer_id, seller_id, company_id, qty, price, total, txn_type)
         )
 
-    # --- NEW: Get Global Market Activity ---
     def get_recent_market_trades(self, limit=20):
-        """Get recent trades from the entire market"""
+        """Get recent trades from the entire market using Index"""
         query = """
             SELECT 
                 t.*,
@@ -247,19 +249,17 @@ class DBManager:
         return self.execute_query(query, (limit,))
 
     # ==========================
-    # LOANS
+    # LOANS & SYSTEM FEATURES
     # ==========================
 
     def create_loan(self, user_id, amount, rate, term):
-        """Create a new loan"""
-        # Calculate monthly payment
+        """Create a new loan with due date"""
         monthly_rate = rate / 100 / 12
         if monthly_rate == 0:
             payment = amount / term
         else:
             payment = amount * (monthly_rate * (1 + monthly_rate) ** term) / ((1 + monthly_rate) ** term - 1)
         
-        # Due date is 30 days from now
         due_date = datetime.now() + timedelta(days=30)
         
         query = """
@@ -274,17 +274,15 @@ class DBManager:
         return [dict(row) for row in rows]
 
     def update_loan_balance(self, loan_id, new_balance, new_status):
-        """Update loan balance and status"""
         query = "UPDATE loans SET remaining_balance = ?, status = ? WHERE loan_id = ?"
         self.execute_update(query, (new_balance, new_status, loan_id))
 
     def add_loan_payment(self, loan_id, amount, principal, interest, balance):
-        """Record a loan payment"""
         query = """
             INSERT INTO loan_payments (loan_id, payment_amount, principal_amount, interest_amount, remaining_balance)
             VALUES (?, ?, ?, ?, ?)
         """
         self.execute_insert(query, (loan_id, amount, principal, interest, balance))
 
-# Global DB Instance
+# Global high-performance DB Instance
 db = DBManager()

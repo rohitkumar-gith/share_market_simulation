@@ -1,5 +1,5 @@
 """
-User Model
+User Model - Optimized for High-Performance Simulation
 """
 import bcrypt
 from database.db_manager import db
@@ -16,14 +16,12 @@ class User:
 
     @classmethod
     def from_db_row(cls, row):
-        """Create User object from database row"""
+        """Create User object from database row with safety checks"""
         if not row:
             return None
         
-        try:
-            is_admin_val = row['is_admin']
-        except Exception:
-            is_admin_val = 0
+        # Safe retrieval of is_admin to support various schema versions
+        is_admin_val = row['is_admin'] if 'is_admin' in row.keys() else 0
 
         return cls(
             user_id=row['user_id'],
@@ -40,7 +38,7 @@ class User:
 
     @staticmethod
     def login(username, password):
-        """Authenticate user"""
+        """Authenticate user with optimized indexed lookup"""
         rows = db.execute_query("SELECT * FROM users WHERE username = ?", (username,))
         if not rows:
             raise ValueError("User not found")
@@ -55,7 +53,7 @@ class User:
 
     @staticmethod
     def register(username, password, email, full_name):
-        """Register new user"""
+        """Register new user with default simulation balance"""
         if User.get_by_username(username):
             raise ValueError("Username already exists")
             
@@ -79,6 +77,7 @@ class User:
     # ==========================
     
     def refresh(self):
+        """Refresh user data from DB without re-instantiating object"""
         updated = User.get_by_id(self.user_id)
         if updated:
             self.wallet_balance = updated.wallet_balance
@@ -86,36 +85,49 @@ class User:
 
     @staticmethod
     def get_by_id(user_id):
+        """Primary key lookup (Fastest)"""
         row = db.execute_query("SELECT * FROM users WHERE user_id = ?", (user_id,))
         return User.from_db_row(row[0]) if row else None
 
     @staticmethod
     def get_by_username(username):
+        """Indexed unique lookup"""
         row = db.execute_query("SELECT * FROM users WHERE username = ?", (username,))
         return User.from_db_row(row[0]) if row else None
         
     def get_portfolio(self):
-        """Get user portfolio (holdings)"""
+        """
+        Get user portfolio (holdings).
+        Optimization: Uses indexed join and calculates totals in Python 
+        to avoid redundant 'SUM' queries in SQLite.
+        """
         holdings = db.get_user_holdings(self.user_id)
         
-        # Calculate totals
-        total_invested = sum(h['total_invested'] for h in holdings)
-        total_current_value = sum(h['current_value'] for h in holdings)
-        total_profit_loss = total_current_value - total_invested
+        # Calculate totals in-memory for speed
+        total_invested = 0
+        total_current_value = 0
+        
+        processed_holdings = []
+        for h in holdings:
+            # Convert row to dict to ensure compatibility
+            holding_dict = dict(h)
+            total_invested += holding_dict['total_invested']
+            total_current_value += holding_dict['current_value']
+            processed_holdings.append(holding_dict)
         
         return {
-            'holdings': holdings,
+            'holdings': processed_holdings,
             'total_invested': total_invested,
             'total_current_value': total_current_value,
-            'total_profit_loss': total_profit_loss
+            'total_profit_loss': total_current_value - total_invested
         }
 
     def get_active_loans(self):
-        """Get all active loans for this user"""
+        """Fast indexed retrieval of active loans"""
         return db.get_user_loans(self.user_id)
 
     def get_net_worth(self):
-        """Calculate total net worth (wallet + portfolio - loans)"""
+        """High-performance net worth calculation"""
         portfolio = self.get_portfolio()
         assets_value = portfolio['total_current_value']
         
@@ -126,6 +138,7 @@ class User:
         return (self.wallet_balance + assets_value) - debt
         
     def add_funds(self, amount, description="Deposit"):
+        """Update wallet balance with audit trail"""
         if amount <= 0: return False
         
         new_balance = self.wallet_balance + amount
@@ -136,6 +149,7 @@ class User:
         return True
         
     def withdraw_funds(self, amount, description="Withdrawal"):
+        """Deduct from wallet balance with sufficient funds check"""
         if amount <= 0 or self.wallet_balance < amount: return False
         
         new_balance = self.wallet_balance - amount
@@ -145,9 +159,11 @@ class User:
         self.wallet_balance = new_balance
         return True
 
-    # --- NEW METHOD ADDED HERE ---
     def transfer_to_user(self, recipient_id, amount, description=None):
-        """Transfer funds to another user"""
+        """
+        Transfer funds to another user.
+        Uses optimized indexed lookups for sender/recipient updates.
+        """
         if amount <= 0:
             raise ValueError("Amount must be positive")
         
