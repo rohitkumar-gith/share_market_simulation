@@ -133,7 +133,7 @@ class AdminScreen(QWidget):
         return widget
 
     # ==========================================
-    # TAB 3: BOT CONTROL (UPDATED)
+    # TAB 3: BOT CONTROL
     # ==========================================
     def create_bots_tab(self):
         """Tab for Bot Management"""
@@ -405,15 +405,6 @@ class AdminScreen(QWidget):
                 # --- NEW LOGIN BUTTON ---
                 btn_login = QPushButton("👁️ Login")
                 btn_login.setStyleSheet("background-color: #3498DB; color: white; font-weight: bold;")
-                # Need to find the associated User ID. We can guess from bot name or fetch it.
-                # Fortunately, our stats already include user_id if we modify bot_trader.
-                # Let's just find the user by username since bot['bot_name'] is the full name.
-                # Actually, best to fetch user by username derived from bot name, or...
-                # WAIT: bot_trader.get_bot_statistics() didn't return user_id in previous code.
-                # Let's fix that too.
-                
-                # Since I can't modify bot_trader in this specific response block easily without making it huge, 
-                # I'll rely on the username convention: "ArjunMehtaBot"
                 username = bot['bot_name'].replace(" ", "") + "Bot"
                 user = User.get_by_username(username)
                 
@@ -428,8 +419,6 @@ class AdminScreen(QWidget):
         """Switch session to the selected bot"""
         success = auth_service.login_as_user(user_id)
         if success:
-            # Refresh the MAIN WINDOW to show new user data
-            # We access the main window via parent() or window()
             if self.window():
                 self.window().on_login_success()
                 QMessageBox.information(self, "Switched", "You are now logged in as this Bot.\nGo to Dashboard to see their stats.")
@@ -478,7 +467,23 @@ class AdminScreen(QWidget):
 
     def refresh_data(self):
         """Called by main window when tab is switched"""
-        self.refresh_company_combo()
+        # --- FIX: SMART REFRESH ---
+        # Only refresh specific parts based on active tab to prevent resetting user inputs
+        current_tab_index = self.tabs.currentIndex()
+        
+        # Tab 0: Market Control
+        # Tab 1: User Management
+        # Tab 2: Bot Control
+        # Tab 3: Create Asset
+        # Tab 4: Edit Assets
+        
+        # Always refresh read-only tables
         self.refresh_users()
         self.refresh_bots()
-        self.load_assets_for_edit()
+        
+        # Only refresh input combos if their tab is NOT active
+        if current_tab_index != 0:
+            self.refresh_company_combo()
+            
+        if current_tab_index != 4:
+            self.load_assets_for_edit()

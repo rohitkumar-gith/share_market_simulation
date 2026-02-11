@@ -6,7 +6,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QColor
 from services.auth_service import auth_service
 from services.company_service import company_service
-from services.asset_service import asset_service # <--- RESTORED
+from services.asset_service import asset_service
 from utils.formatters import Formatter
 import config
 
@@ -73,7 +73,7 @@ class CompanyDashboard(QWidget):
         self.current_company_id = None
         self.init_ui()
         
-        # RESTORED: Auto-refresh pending revenue every 5 seconds
+        # Auto-refresh pending revenue every 5 seconds
         self.rev_timer = QTimer(self)
         self.rev_timer.timeout.connect(self.update_revenue_display)
         self.rev_timer.start(5000)
@@ -138,7 +138,7 @@ class CompanyDashboard(QWidget):
         self.tabs = QTabWidget()
         self.tabs.addTab(self.create_overview_tab(), "📊 Overview")
         self.tabs.addTab(self.create_finance_tab(), "💰 Finance & Dividends")
-        self.tabs.addTab(self.create_ops_tab(), "🏭 Operations (Assets)") # RESTORED
+        self.tabs.addTab(self.create_ops_tab(), "🏭 Operations (Assets)") 
         
         details_layout.addWidget(self.tabs)
         self.content_stack.addWidget(self.details_page)
@@ -166,7 +166,6 @@ class CompanyDashboard(QWidget):
         self.lbl_wallet_overview = self.create_stat_card("Wallet Balance", "₹0.00")
         layout.addWidget(self.lbl_wallet_overview, 1, 1)
         
-        # Add filler to push content up
         layout.setRowStretch(2, 1)
         widget.setLayout(layout)
         return widget
@@ -175,7 +174,6 @@ class CompanyDashboard(QWidget):
         widget = QWidget()
         layout = QVBoxLayout()
         
-        # Wallet Control
         grp = QGroupBox("Company Wallet")
         form = QFormLayout()
         
@@ -187,7 +185,6 @@ class CompanyDashboard(QWidget):
         layout.addWidget(grp)
         grp.setLayout(form)
         
-        # Actions Row
         actions = QHBoxLayout()
         
         btn_dep = QPushButton("Deposit Funds")
@@ -207,7 +204,6 @@ class CompanyDashboard(QWidget):
         
         layout.addLayout(actions)
         
-        # Transactions
         layout.addWidget(QLabel("Recent Transactions"))
         self.trans_table = QTableWidget()
         self.trans_table.setColumnCount(3)
@@ -219,16 +215,13 @@ class CompanyDashboard(QWidget):
         return widget
 
     def create_ops_tab(self):
-        """RESTORED: Buy Assets & Collect Revenue"""
         widget = QWidget()
         layout = QVBoxLayout()
         
-        # 1. Buy Section
         buy_grp = QGroupBox("Marketplace")
         buy_layout = QHBoxLayout()
         
         self.assets_combo = QComboBox()
-        # Populate later in refresh_data/load_details
         buy_layout.addWidget(self.assets_combo, 2)
         
         buy_btn = QPushButton("Buy Asset")
@@ -239,7 +232,6 @@ class CompanyDashboard(QWidget):
         buy_grp.setLayout(buy_layout)
         layout.addWidget(buy_grp)
         
-        # 2. Revenue Section
         rev_grp = QGroupBox("Revenue Control")
         rev_layout = QHBoxLayout()
         
@@ -255,15 +247,12 @@ class CompanyDashboard(QWidget):
         rev_grp.setLayout(rev_layout)
         layout.addWidget(rev_grp)
         
-        # 3. List
         layout.addWidget(QLabel("Owned Assets"))
         self.owned_assets_list = QListWidget()
         layout.addWidget(self.owned_assets_list)
         
         widget.setLayout(layout)
         return widget
-
-    # --- Helpers ---
 
     def create_stat_card(self, title, value):
         frame = QFrame()
@@ -282,13 +271,13 @@ class CompanyDashboard(QWidget):
         labels = frame.findChildren(QLabel)
         if len(labels) >= 2: labels[1].setText(value)
 
-    # --- Logic ---
-
     def refresh_data(self):
         user = auth_service.get_current_user()
         if not user: return
         
-        # Refresh Company List
+        # --- FIX: Preserve Selection ---
+        current_row = self.company_list.currentRow()
+        
         self.company_list.clear()
         companies = company_service.get_user_companies(user.user_id)
         
@@ -300,12 +289,15 @@ class CompanyDashboard(QWidget):
                 item.setData(Qt.UserRole, comp['company_id'])
                 self.company_list.addItem(item)
                 
+        # Restore selection
+        if current_row >= 0 and current_row < self.company_list.count():
+            self.company_list.setCurrentRow(current_row)
+        
         # Refresh Details if active
         if self.current_company_id:
             self.load_company_details(self.current_company_id)
 
     def load_company_details(self, company_id):
-        # Fetch Data
         data = company_service.get_company_financial_summary(company_id)
         details = company_service.get_company_details(company_id)
         
@@ -314,13 +306,11 @@ class CompanyDashboard(QWidget):
         comp = details['company']
         self.comp_title.setText(f"{comp['company_name']} ({comp['ticker_symbol']})")
         
-        # 1. Update Overview Stats
         self.update_card_value(self.lbl_price, Formatter.format_currency(data['share_price']))
         self.update_card_value(self.lbl_market_cap, Formatter.format_currency(data['market_cap']))
         self.update_card_value(self.lbl_net_worth, Formatter.format_currency(data['net_worth']))
         self.update_card_value(self.lbl_wallet_overview, Formatter.format_currency(data['wallet_balance']))
         
-        # 2. Update Finance Tab
         self.lbl_wallet_finance.setText(Formatter.format_currency(data['wallet_balance']))
         
         self.trans_table.setRowCount(len(data['recent_transactions']))
@@ -332,24 +322,23 @@ class CompanyDashboard(QWidget):
             self.trans_table.setItem(row, 1, amt_item)
             self.trans_table.setItem(row, 2, QTableWidgetItem(t['description']))
             
-        # 3. Update Operations Tab (Assets)
-        # Populate Marketplace Dropdown
-        self.assets_combo.clear()
-        all_assets = asset_service.get_all_assets()
-        for a in all_assets:
-            self.assets_combo.addItem(f"{a['name']} - ₹{a['base_price']} (Earns ₹{a['revenue_rate']}/min)", a['asset_id'])
+        # --- FIX: SMART POPULATION ---
+        # Only populate Marketplace Dropdown if it is EMPTY
+        # This prevents the list from resetting while user is scrolling/selecting
+        if self.assets_combo.count() == 0:
+            self.assets_combo.clear()
+            all_assets = asset_service.get_all_assets()
+            for a in all_assets:
+                self.assets_combo.addItem(f"{a['name']} - ₹{a['base_price']} (Earns ₹{a['revenue_rate']}/min)", a['asset_id'])
             
-        # Populate Owned List
         self.owned_assets_list.clear()
         my_assets = asset_service.get_company_assets(company_id)
         for a in my_assets:
             self.owned_assets_list.addItem(f"{a['name']} (Type: {a['asset_type']}) - Earns: ₹{a['revenue_rate']}/min")
             
-        # Update Revenue
         self.update_revenue_display()
 
     def update_revenue_display(self):
-        """Timer calls this to update pending revenue label"""
         if not self.current_company_id or self.content_stack.currentIndex() != 1: 
             return
             
@@ -364,8 +353,6 @@ class CompanyDashboard(QWidget):
             self.collect_btn.setEnabled(False)
             self.collect_btn.setText("No Revenue")
             self.collect_btn.setStyleSheet("background-color: gray; color: white;")
-
-    # --- Actions ---
 
     def start_new_company(self):
         dialog = CreateCompanyDialog(self)
