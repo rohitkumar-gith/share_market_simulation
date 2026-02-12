@@ -298,8 +298,8 @@ class MarketScreen(QWidget):
 
     def show_chart(self, company):
         """Open chart window for company"""
-        history = market_engine.get_price_history(company.company_id)
-        chart = ChartWindow(company.company_name, history, self)
+        # FIX: Pass company object, not just name/history
+        chart = ChartWindow(company, self)
         chart.exec_()
     
     def open_trend_dialog(self):

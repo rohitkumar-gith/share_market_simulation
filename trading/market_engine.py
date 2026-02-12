@@ -61,15 +61,22 @@ class MarketEngine:
             
             for company in companies:
                 base_price = company.share_price
+                
+                # --- GOLD LOGIC: Lower volatility for Gold ---
+                volatility = 0.01 if company.ticker_symbol == 'GOLD' else 0.05
+                
                 # Random trend for the last 24h
-                trend = random.choice([-1, 1]) * random.uniform(0.01, 0.05)
+                trend = random.choice([-1, 1]) * random.uniform(0.01, volatility)
                 start_price = base_price * (1 - trend) 
                 
                 for i in range(24, -1, -1):
                     time_point = now - timedelta(hours=i)
                     progress = (24 - i) / 24.0
                     price_at_point = start_price + (base_price - start_price) * progress
-                    noise = random.uniform(-0.02, 0.02) * price_at_point
+                    
+                    # Less noise for Gold
+                    noise_factor = volatility / 2
+                    noise = random.uniform(-noise_factor, noise_factor) * price_at_point
                     final_price = round(max(1.0, price_at_point + noise), 2)
                     
                     db.execute_insert(
@@ -88,6 +95,9 @@ class MarketEngine:
         current_price = company.share_price
         new_price = current_price
         
+        # Check if this company is Digital Gold
+        is_gold = (company.ticker_symbol == 'GOLD')
+        
         # --- 1. Base Logic (VWAP - Volume Weighted Average Price) ---
         query = """
             SELECT price_per_share, quantity 
@@ -99,7 +109,9 @@ class MarketEngine:
         
         if not trades:
             # No recent trades: Random drift
-            drift = random.uniform(-0.005, 0.005)
+            # Gold drifts less than stocks
+            volatility = 0.001 if is_gold else 0.005
+            drift = random.uniform(-volatility, volatility)
             new_price = current_price * (1 + drift)
         else:
             total_value = sum(t['price_per_share'] * t['quantity'] for t in trades)
@@ -112,14 +124,26 @@ class MarketEngine:
                 new_price = current_price + (gap * convergence)
                 
                 # Add noise
-                noise = random.uniform(-0.005, 0.005)
+                volatility = 0.001 if is_gold else 0.005
+                noise = random.uniform(-volatility, volatility)
                 new_price = new_price * (1 + noise)
 
         # --- 2. Apply Targeted Market Trend (Admin Control) ---
         if datetime.now() < self.trend_end_time:
-            # Apply the calculated geometric step
-            if self.trend_step_multiplier != 1.0:
-                new_price = new_price * self.trend_step_multiplier
+            if is_gold:
+                # GOLD LOGIC: Inverse Correlation
+                # If market is CRASHING (Bear), Gold goes UP (Safe Haven)
+                # If market is BOOMING (Bull), Gold stays flat or slight dip
+                if self.trend_type == 'bear':
+                    gold_boost = 1.002 # +0.2% per tick
+                    new_price = new_price * gold_boost
+                elif self.trend_type == 'bull':
+                    gold_drag = 0.999 # -0.1% per tick
+                    new_price = new_price * gold_drag
+            else:
+                # Regular stocks follow the trend
+                if self.trend_step_multiplier != 1.0:
+                    new_price = new_price * self.trend_step_multiplier
         else:
             # Reset trend if expired
             if self.trend_type != 'neutral':
@@ -184,12 +208,26 @@ class MarketEngine:
             'old_price': old_price
         }
 
-    def get_price_history(self, company_id, limit=100):
-        """Get data for charts"""
-        results = db.execute_query("""
-            SELECT price, recorded_at as timestamp 
-            FROM price_history WHERE company_id = ? ORDER BY recorded_at ASC LIMIT ?
-        """, (company_id, limit))
+    def get_price_history(self, company_id, minutes=None, limit=100):
+        """Get data for charts. minutes overrides limit if provided."""
+        if minutes:
+            # Fetch by Time
+            cutoff_time = datetime.now() - timedelta(minutes=minutes)
+            results = db.execute_query("""
+                SELECT price, recorded_at as timestamp 
+                FROM price_history WHERE company_id = ? AND recorded_at >= ?
+                ORDER BY recorded_at DESC
+            """, (company_id, cutoff_time))
+        else:
+            # Fetch by Count
+            results = db.execute_query("""
+                SELECT price, recorded_at as timestamp 
+                FROM price_history WHERE company_id = ? ORDER BY recorded_at DESC LIMIT ?
+            """, (company_id, limit))
+        
+        # Reverse to chronological order (Oldest -> Newest) for the graph
+        results.reverse()
+        
         return [{'price': r['price'], 'timestamp': r['timestamp']} for r in results]
 
 market_engine = MarketEngine()

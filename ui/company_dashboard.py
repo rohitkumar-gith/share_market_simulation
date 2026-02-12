@@ -131,7 +131,7 @@ class CompanyDashboard(QWidget):
         self.tabs.addTab(self.create_overview_tab(), "📊 Overview")
         self.tabs.addTab(self.create_finance_tab(), "💰 Finance & Dividends")
         self.tabs.addTab(self.create_ops_tab(), "🏭 Operations (Assets)") 
-        self.tabs.addTab(self.create_settings_tab(), "⚙️ Settings") # NEW TAB
+        self.tabs.addTab(self.create_settings_tab(), "⚙️ Settings")
         
         details_layout.addWidget(self.tabs)
         self.content_stack.addWidget(self.details_page)
@@ -245,7 +245,6 @@ class CompanyDashboard(QWidget):
         widget.setLayout(layout)
         return widget
 
-    # --- NEW SETTINGS TAB ---
     def create_settings_tab(self):
         widget = QWidget()
         layout = QVBoxLayout()
@@ -348,16 +347,21 @@ class CompanyDashboard(QWidget):
         self.comp_title.setText(f"{comp['company_name']} ({comp['ticker_symbol']})")
         
         # Populate Settings Tab
-        # Block signals so setting the text doesn't trigger unwanted events if we add them later
         self.edit_name_input.setText(comp['company_name'])
         self.edit_desc_input.setText(comp.get('description', ''))
         
+        # --- FIX: CALCULATE REAL NET WORTH ---
+        wallet_balance = data.get('wallet_balance', 0.0)
+        total_assets = data.get('total_assets', 0.0)
+        real_net_worth = wallet_balance + total_assets
+        
         self.update_card_value(self.lbl_price, Formatter.format_currency(data['share_price']))
         self.update_card_value(self.lbl_market_cap, Formatter.format_currency(data['market_cap']))
-        self.update_card_value(self.lbl_net_worth, Formatter.format_currency(data['net_worth']))
-        self.update_card_value(self.lbl_wallet_overview, Formatter.format_currency(data['wallet_balance']))
+        # Use calculated real_net_worth instead of db value
+        self.update_card_value(self.lbl_net_worth, Formatter.format_currency(real_net_worth))
+        self.update_card_value(self.lbl_wallet_overview, Formatter.format_currency(wallet_balance))
         
-        self.lbl_wallet_finance.setText(Formatter.format_currency(data['wallet_balance']))
+        self.lbl_wallet_finance.setText(Formatter.format_currency(wallet_balance))
         
         self.trans_table.setRowCount(len(data['recent_transactions']))
         for row, t in enumerate(data['recent_transactions']):
@@ -381,7 +385,6 @@ class CompanyDashboard(QWidget):
             
         self.update_revenue_display()
 
-    # --- NEW LOGIC METHODS ---
     def save_company_details(self):
         if not self.current_company_id: return
         
@@ -406,7 +409,6 @@ class CompanyDashboard(QWidget):
         
         shares = self.issue_shares_spin.value()
         
-        # Confirmation Dialog
         reply = QMessageBox.question(self, 'Confirm Share Issuance', 
                                      f"Are you sure you want to issue {shares:,} new shares?\nThis will dilute existing shareholders.",
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -421,7 +423,6 @@ class CompanyDashboard(QWidget):
             else:
                 QMessageBox.warning(self, "Error", res['message'])
 
-    # --- EXISTING LOGIC ---
     def update_revenue_display(self):
         if not self.current_company_id or self.content_stack.currentIndex() != 1: 
             return
