@@ -17,6 +17,7 @@ class BotTrader:
     def __init__(self):
         self.bots = []
         self.initialized = False
+        self.is_processing = False # Thread Safety Flag
         # Realistic Names
         self.bot_names = [
             "Arjun Mehta", "Priya Sharma", "Rahul Verma", 
@@ -81,25 +82,37 @@ class BotTrader:
     
     def execute_bot_trades(self):
         """Execute trades for all active bots"""
-        if not self.initialized: self.initialize_bots()
+        if self.is_processing: return {'trades_executed': 0}
+        self.is_processing = True
         
-        companies = Company.get_all()
-        if not companies: return {'trades_executed': 0}
-        
-        trades_executed = 0
-        
-        for bot in self.bots:
-            if not bot['is_active']: continue
+        try:
+            if not self.initialized: self.initialize_bots()
             
-            # 100% Activity Rate (Fast Market)
-            try:
-                result = self._execute_single_bot_trade(bot, companies)
-                if result: trades_executed += 1
-            except Exception as e:
-                print(f"Bot trade error: {e}")
-                continue
-        
-        return {'trades_executed': trades_executed}
+            companies = Company.get_all()
+            if not companies: 
+                self.is_processing = False
+                return {'trades_executed': 0}
+            
+            trades_executed = 0
+            
+            for bot in self.bots:
+                if not bot['is_active']: continue
+                
+                # 100% Activity Rate (Fast Market)
+                try:
+                    result = self._execute_single_bot_trade(bot, companies)
+                    if result: trades_executed += 1
+                except Exception as e:
+                    print(f"Bot trade error: {e}")
+                    continue
+            
+            self.is_processing = False
+            return {'trades_executed': trades_executed}
+            
+        except Exception as e:
+            self.is_processing = False
+            print(f"Critical Bot Error: {e}")
+            return {'trades_executed': 0}
 
     def force_market_scan(self):
         """Force bots to react instantly to new user orders"""

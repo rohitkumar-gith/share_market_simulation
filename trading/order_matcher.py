@@ -1,35 +1,43 @@
 """
-Order Matcher - Matches Buy and Sell orders
+Order Matcher - Matches Buy/Sell orders and executes trades
 """
 from database.db_manager import db
+from models.transaction import Transaction
+from models.company import Company
 from models.user import User
-from models.share import Share
 from datetime import datetime
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class OrderMatcher:
     """Matches pending buy and sell orders"""
     
     def match_all_orders(self):
         """Run matching algorithm for all companies"""
-        companies = db.execute_query("SELECT company_id FROM companies")
+        companies = Company.get_all()
         total_matches = 0
         
         for company in companies:
-            matches = self.match_orders_for_company(company['company_id'])
-            total_matches += matches
-            
+            try:
+                matches = self.match_orders_for_company(company.company_id)
+                total_matches += matches
+            except Exception as e:
+                logger.error(f"Error matching orders for {company.company_name}: {e}")
+                
         return {'total_matches': total_matches, 'timestamp': datetime.now()}
-    
+
     def match_orders_for_company(self, company_id):
         """Match orders for a specific company"""
-        # Get pending buy orders (Highest Price First)
+        # Get pending buy orders (Highest Price First, then Oldest)
         buy_orders = db.execute_query("""
             SELECT * FROM share_orders 
             WHERE company_id = ? AND order_type = 'buy' AND status = 'pending'
             ORDER BY price_per_share DESC, created_at ASC
         """, (company_id,))
         
-        # Get pending sell orders (Lowest Price First)
+        # Get pending sell orders (Lowest Price First, then Oldest)
         sell_orders = db.execute_query("""
             SELECT * FROM share_orders 
             WHERE company_id = ? AND order_type = 'sell' AND status = 'pending'
@@ -40,12 +48,11 @@ class OrderMatcher:
             return 0
             
         matches = 0
-        buy_idx = 0
-        sell_idx = 0
-        
-        # Convert to mutable lists of dicts
         buy_orders = [dict(row) for row in buy_orders]
         sell_orders = [dict(row) for row in sell_orders]
+        
+        buy_idx = 0
+        sell_idx = 0
         
         while buy_idx < len(buy_orders) and sell_idx < len(sell_orders):
             buy = buy_orders[buy_idx]
@@ -87,6 +94,7 @@ class OrderMatcher:
             if buy_order['quantity'] == quantity:
                 db.execute_update("UPDATE share_orders SET status = 'completed', completed_at = ? WHERE order_id = ?",
                                 (datetime.now(), buy_order['order_id']))
+                
                 # Refund difference
                 locked_amount = buy_order['price_per_share'] * quantity
                 refund = locked_amount - total_amount
@@ -112,6 +120,11 @@ class OrderMatcher:
             
             # 5. Record Transaction
             db.add_transaction(buyer_id, company_id, quantity, price, 'trade', seller_id)
+            
+            # 6. UPDATE COMPANY PRICE (CRITICAL IMPROVEMENT)
+            # This makes the market react immediately to the trade
+            db.execute_update("UPDATE companies SET share_price = ? WHERE company_id = ?", (price, company_id))
+            db.execute_insert("INSERT INTO price_history (company_id, price) VALUES (?, ?)", (company_id, price))
             
             print(f"Trade Executed: {quantity} shares of Co:{company_id} @ {price}")
             

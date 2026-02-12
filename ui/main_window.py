@@ -4,7 +4,7 @@ Main Window - Container for all screens with navigation
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QStackedWidget, QMessageBox,
                              QFrame, QStatusBar)
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QIcon
 from services.auth_service import auth_service
 from trading.market_engine import market_engine
@@ -12,6 +12,42 @@ from trading.bot_trader import bot_trader
 from trading.order_matcher import order_matcher
 from utils.formatters import Formatter
 import config
+import time
+
+# --- NEW: Background Worker for Bots ---
+class BotWorker(QThread):
+    """Runs trading bots in a separate thread to prevent UI freezing"""
+    trades_executed = pyqtSignal(int)  # Signal to update UI with trade count
+    
+    def __init__(self):
+        super().__init__()
+        self.is_running = True
+
+    def run(self):
+        """Continuous trading loop"""
+        while self.is_running:
+            try:
+                # Run one cycle of bot trades
+                result = bot_trader.execute_bot_trades()
+                count = result.get('trades_executed', 0)
+                
+                # Emit signal if trades happened
+                if count > 0:
+                    self.trades_executed.emit(count)
+                
+                # Wait before next cycle (Configuration defined interval)
+                # We break the sleep into small chunks to allow fast stopping
+                for _ in range(config.BOT_TRADING_INTERVAL): 
+                    if not self.is_running: break
+                    time.sleep(1) 
+                    
+            except Exception as e:
+                print(f"Bot Worker Error: {e}")
+                time.sleep(5) # specific error backoff
+
+    def stop(self):
+        self.is_running = False
+        self.wait()
 
 class MainWindow(QMainWindow):
     """Main application window"""
@@ -19,6 +55,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.current_user = None
+        self.bot_thread = None # Initialize variable
         self.init_ui()
         self.setup_timers()
     
@@ -258,12 +295,13 @@ class MainWindow(QMainWindow):
         """)
 
     def setup_timers(self):
-        # Stop existing timers if they exist to prevent duplicates
+        # Stop existing timers/threads
         try:
             if hasattr(self, 'market_timer'): self.market_timer.stop()
-            if hasattr(self, 'bot_timer'): self.bot_timer.stop()
             if hasattr(self, 'order_timer'): self.order_timer.stop()
             if hasattr(self, 'ui_timer'): self.ui_timer.stop()
+            if self.bot_thread and self.bot_thread.isRunning():
+                self.bot_thread.stop()
         except: pass
 
         # --- SPEED OPTIMIZATION ---
@@ -273,10 +311,10 @@ class MainWindow(QMainWindow):
         self.market_timer.timeout.connect(self.update_market_prices)
         self.market_timer.start(10000) 
         
-        # 2. Bots (5s - TRADING SPEED INCREASED)
-        self.bot_timer = QTimer()
-        self.bot_timer.timeout.connect(self.execute_bot_trades)
-        self.bot_timer.start(5000)
+        # 2. Bots -> NOW RUNNING IN BACKGROUND THREAD
+        self.bot_thread = BotWorker()
+        self.bot_thread.trades_executed.connect(self.on_bot_activity)
+        self.bot_thread.start()
         
         # 3. Order Matching (5s - MATCHING SPEED INCREASED)
         self.order_timer = QTimer()
@@ -288,14 +326,13 @@ class MainWindow(QMainWindow):
         self.ui_timer.timeout.connect(self.refresh_ui_data)
         self.ui_timer.start(5000)
     
+    def on_bot_activity(self, count):
+        """Called when bots execute trades in background"""
+        self.status_bar.showMessage(f"🤖 Market Active: {count} bot trades executed recently", 3000)
+
     def update_market_prices(self):
         try:
             market_engine.update_all_prices()
-        except: pass
-    
-    def execute_bot_trades(self):
-        try:
-            bot_trader.execute_bot_trades()
         except: pass
     
     def match_orders(self):
@@ -382,7 +419,13 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(self, 'Logout', 'Are you sure you want to logout?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             auth_service.logout()
-            # This calls closeEvent -> which STOPS timers
+            
+            # STOP THREADS PROPERLY
+            if self.bot_thread: self.bot_thread.stop()
+            self.market_timer.stop()
+            self.order_timer.stop()
+            self.ui_timer.stop()
+            
             self.close()
             from ui.auth_screen import AuthScreen
             self.auth_screen = AuthScreen()
@@ -392,14 +435,14 @@ class MainWindow(QMainWindow):
     def on_login_success(self):
         self.update_user_info()
         self.load_screens()
-        # --- FIX: RESTART TIMERS AFTER LOGGING BACK IN ---
+        # RESTART THREADS/TIMERS
         self.setup_timers()
         self.showMaximized()
     
     def closeEvent(self, event):
         try:
             self.market_timer.stop()
-            self.bot_timer.stop()
+            if self.bot_thread: self.bot_thread.stop()
             self.order_timer.stop()
             self.ui_timer.stop()
         except: pass
