@@ -20,7 +20,6 @@ class CreateCompanyDialog(QDialog):
         
     def init_ui(self):
         layout = QVBoxLayout()
-        
         form = QFormLayout()
         
         self.name_input = QLineEdit()
@@ -57,7 +56,6 @@ class CreateCompanyDialog(QDialog):
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
-        
         self.setLayout(layout)
     
     def get_data(self):
@@ -73,7 +71,6 @@ class CompanyDashboard(QWidget):
         self.current_company_id = None
         self.init_ui()
         
-        # Auto-refresh pending revenue every 5 seconds
         self.rev_timer = QTimer(self)
         self.rev_timer.timeout.connect(self.update_revenue_display)
         self.rev_timer.start(5000)
@@ -83,7 +80,6 @@ class CompanyDashboard(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(20)
         
-        # Header
         header = QHBoxLayout()
         title = QLabel("My Companies")
         title.setFont(QFont('Arial', 24, QFont.Bold))
@@ -97,7 +93,6 @@ class CompanyDashboard(QWidget):
         
         layout.addLayout(header)
         
-        # Content Stack
         self.content_stack = QStackedWidget()
         
         # --- Page 1: List ---
@@ -116,29 +111,27 @@ class CompanyDashboard(QWidget):
         
         self.content_stack.addWidget(self.list_page)
         
-        # --- Page 2: Details (With Tabs) ---
+        # --- Page 2: Details ---
         self.details_page = QWidget()
         details_layout = QVBoxLayout(self.details_page)
         details_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Back Nav
         back_btn = QPushButton("← Back to List")
         back_btn.setStyleSheet("background-color: transparent; color: #BBB; text-align: left;")
         back_btn.setFixedWidth(100)
         back_btn.clicked.connect(self.go_back)
         details_layout.addWidget(back_btn)
         
-        # Header
         self.comp_title = QLabel("Company Name")
         self.comp_title.setFont(QFont('Arial', 22, QFont.Bold))
         self.comp_title.setStyleSheet(f"color: {config.COLOR_ACCENT};")
         details_layout.addWidget(self.comp_title)
         
-        # Tabs Container
         self.tabs = QTabWidget()
         self.tabs.addTab(self.create_overview_tab(), "📊 Overview")
         self.tabs.addTab(self.create_finance_tab(), "💰 Finance & Dividends")
         self.tabs.addTab(self.create_ops_tab(), "🏭 Operations (Assets)") 
+        self.tabs.addTab(self.create_settings_tab(), "⚙️ Settings") # NEW TAB
         
         details_layout.addWidget(self.tabs)
         self.content_stack.addWidget(self.details_page)
@@ -148,7 +141,6 @@ class CompanyDashboard(QWidget):
         self.refresh_data()
 
     # --- Tab Builders ---
-
     def create_overview_tab(self):
         widget = QWidget()
         layout = QGridLayout()
@@ -186,7 +178,6 @@ class CompanyDashboard(QWidget):
         grp.setLayout(form)
         
         actions = QHBoxLayout()
-        
         btn_dep = QPushButton("Deposit Funds")
         btn_dep.setStyleSheet(f"background-color: {config.COLOR_SUCCESS}; color: white;")
         btn_dep.clicked.connect(self.deposit_funds)
@@ -203,8 +194,8 @@ class CompanyDashboard(QWidget):
         actions.addWidget(btn_div)
         
         layout.addLayout(actions)
-        
         layout.addWidget(QLabel("Recent Transactions"))
+        
         self.trans_table = QTableWidget()
         self.trans_table.setColumnCount(3)
         self.trans_table.setHorizontalHeaderLabels(["Type", "Amount", "Description"])
@@ -254,6 +245,59 @@ class CompanyDashboard(QWidget):
         widget.setLayout(layout)
         return widget
 
+    # --- NEW SETTINGS TAB ---
+    def create_settings_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        # 1. Edit Details Section
+        edit_grp = QGroupBox("Edit Details")
+        form = QFormLayout()
+        
+        self.edit_name_input = QLineEdit()
+        form.addRow("Company Name:", self.edit_name_input)
+        
+        self.edit_desc_input = QTextEdit()
+        self.edit_desc_input.setMaximumHeight(80)
+        form.addRow("Description:", self.edit_desc_input)
+        
+        save_btn = QPushButton("Save Changes")
+        save_btn.setStyleSheet(f"background-color: {config.COLOR_SUCCESS}; color: white; width: 150px;")
+        save_btn.clicked.connect(self.save_company_details)
+        form.addRow("", save_btn)
+        
+        edit_grp.setLayout(form)
+        layout.addWidget(edit_grp)
+        
+        # 2. Issue Shares Section
+        shares_grp = QGroupBox("Corporate Actions")
+        shares_layout = QVBoxLayout()
+        
+        info_lbl = QLabel("Issuing more shares dilutes existing shareholders but creates more inventory for the IPO pool.")
+        info_lbl.setWordWrap(True)
+        info_lbl.setStyleSheet("color: #AAA; font-style: italic;")
+        shares_layout.addWidget(info_lbl)
+        
+        issue_form = QFormLayout()
+        self.issue_shares_spin = QSpinBox()
+        self.issue_shares_spin.setRange(100, 10000000)
+        self.issue_shares_spin.setValue(1000)
+        self.issue_shares_spin.setSingleStep(1000)
+        issue_form.addRow("Shares to Issue:", self.issue_shares_spin)
+        
+        issue_btn = QPushButton("Issue Shares")
+        issue_btn.setStyleSheet(f"background-color: {config.COLOR_PRIMARY}; color: white;")
+        issue_btn.clicked.connect(self.issue_new_shares)
+        issue_form.addRow("", issue_btn)
+        
+        shares_layout.addLayout(issue_form)
+        shares_grp.setLayout(shares_layout)
+        layout.addWidget(shares_grp)
+        
+        layout.addStretch()
+        widget.setLayout(layout)
+        return widget
+
     def create_stat_card(self, title, value):
         frame = QFrame()
         frame.setStyleSheet("background-color: #333; border-radius: 8px; padding: 10px;")
@@ -275,7 +319,6 @@ class CompanyDashboard(QWidget):
         user = auth_service.get_current_user()
         if not user: return
         
-        # --- FIX: Preserve Selection ---
         current_row = self.company_list.currentRow()
         
         self.company_list.clear()
@@ -289,11 +332,9 @@ class CompanyDashboard(QWidget):
                 item.setData(Qt.UserRole, comp['company_id'])
                 self.company_list.addItem(item)
                 
-        # Restore selection
         if current_row >= 0 and current_row < self.company_list.count():
             self.company_list.setCurrentRow(current_row)
         
-        # Refresh Details if active
         if self.current_company_id:
             self.load_company_details(self.current_company_id)
 
@@ -305,6 +346,11 @@ class CompanyDashboard(QWidget):
         
         comp = details['company']
         self.comp_title.setText(f"{comp['company_name']} ({comp['ticker_symbol']})")
+        
+        # Populate Settings Tab
+        # Block signals so setting the text doesn't trigger unwanted events if we add them later
+        self.edit_name_input.setText(comp['company_name'])
+        self.edit_desc_input.setText(comp.get('description', ''))
         
         self.update_card_value(self.lbl_price, Formatter.format_currency(data['share_price']))
         self.update_card_value(self.lbl_market_cap, Formatter.format_currency(data['market_cap']))
@@ -322,9 +368,6 @@ class CompanyDashboard(QWidget):
             self.trans_table.setItem(row, 1, amt_item)
             self.trans_table.setItem(row, 2, QTableWidgetItem(t['description']))
             
-        # --- FIX: SMART POPULATION ---
-        # Only populate Marketplace Dropdown if it is EMPTY
-        # This prevents the list from resetting while user is scrolling/selecting
         if self.assets_combo.count() == 0:
             self.assets_combo.clear()
             all_assets = asset_service.get_all_assets()
@@ -338,6 +381,47 @@ class CompanyDashboard(QWidget):
             
         self.update_revenue_display()
 
+    # --- NEW LOGIC METHODS ---
+    def save_company_details(self):
+        if not self.current_company_id: return
+        
+        new_name = self.edit_name_input.text().strip()
+        new_desc = self.edit_desc_input.toPlainText().strip()
+        
+        if not new_name:
+            QMessageBox.warning(self, "Error", "Company Name cannot be empty.")
+            return
+            
+        user = auth_service.get_current_user()
+        res = company_service.edit_company_details(user.user_id, self.current_company_id, new_name, new_desc)
+        
+        if res['success']:
+            QMessageBox.information(self, "Success", res['message'])
+            self.refresh_data()
+        else:
+            QMessageBox.warning(self, "Error", res['message'])
+
+    def issue_new_shares(self):
+        if not self.current_company_id: return
+        
+        shares = self.issue_shares_spin.value()
+        
+        # Confirmation Dialog
+        reply = QMessageBox.question(self, 'Confirm Share Issuance', 
+                                     f"Are you sure you want to issue {shares:,} new shares?\nThis will dilute existing shareholders.",
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                                     
+        if reply == QMessageBox.Yes:
+            user = auth_service.get_current_user()
+            res = company_service.issue_more_shares(user.user_id, self.current_company_id, shares)
+            
+            if res['success']:
+                QMessageBox.information(self, "Success", res['message'])
+                self.refresh_data()
+            else:
+                QMessageBox.warning(self, "Error", res['message'])
+
+    # --- EXISTING LOGIC ---
     def update_revenue_display(self):
         if not self.current_company_id or self.content_stack.currentIndex() != 1: 
             return

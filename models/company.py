@@ -133,3 +133,26 @@ class Company:
 
     def get_shareholders(self):
         return db.get_company_shareholders(self.company_id)
+
+    # --- NEW METHODS APPENDED (SAFE) ---
+    def update_details(self, new_name, new_desc):
+        """Update company text details"""
+        db.execute_update(
+            "UPDATE companies SET company_name = ?, description = ? WHERE company_id = ?",
+            (new_name, new_desc, self.company_id)
+        )
+        self.company_name = new_name
+        self.description = new_desc
+
+    def issue_new_shares(self, additional_shares):
+        """Increase total shares and available shares"""
+        new_total = self.total_shares + additional_shares
+        new_available = self.available_shares + additional_shares
+        
+        db.execute_update(
+            "UPDATE companies SET total_shares = ?, available_shares = ? WHERE company_id = ?",
+            (new_total, new_available, self.company_id)
+        )
+        self.total_shares = new_total
+        self.available_shares = new_available
+        return new_available

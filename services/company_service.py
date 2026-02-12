@@ -48,6 +48,42 @@ class CompanyService:
             print(f"Error getting details: {e}")
             return None
 
+    # --- NEW FEATURE: EDIT COMPANY ---
+    def edit_company_details(self, user_id, company_id, new_name, new_desc):
+        """Allow owner to rename company or update description"""
+        try:
+            company = Company.get_by_id(company_id)
+            if not company: return {'success': False, 'message': "Company not found."}
+            if company.owner_id != user_id:
+                return {'success': False, 'message': "Only the owner can edit the company."}
+                
+            company.update_details(new_name, new_desc)
+            return {'success': True, 'message': "Company details updated successfully."}
+        except Exception as e:
+            return {'success': False, 'message': str(e)}
+
+    # --- NEW FEATURE: ISSUE SHARES ---
+    def issue_more_shares(self, user_id, company_id, additional_shares):
+        """Allow owner to create more shares (Dilution)"""
+        try:
+            if additional_shares <= 0:
+                return {'success': False, 'message': "Must issue at least 1 share."}
+                
+            company = Company.get_by_id(company_id)
+            if not company: return {'success': False, 'message': "Company not found."}
+            if company.owner_id != user_id:
+                return {'success': False, 'message': "Only the owner can issue shares."}
+                
+            # Perform the issuance
+            new_available = company.issue_new_shares(additional_shares)
+            
+            return {
+                'success': True, 
+                'message': f"Successfully issued {additional_shares:,} new shares. They are now available in the IPO pool."
+            }
+        except Exception as e:
+            return {'success': False, 'message': str(e)}
+
     # ==========================
     # WALLET & FINANCE
     # ==========================
