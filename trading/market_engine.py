@@ -5,6 +5,7 @@ import random
 from datetime import datetime, timedelta
 from models.company import Company
 from models.transaction import Transaction
+from models.user import User  # Imported to handle the News Bot
 from database.db_manager import db
 import config
 
@@ -18,8 +19,76 @@ class MarketEngine:
         self.trend_step_multiplier = 1.0
         self.trend_intensity = 0.0 # Added for Bots to read
         
+        # News Event Cooldown
+        self.last_event_time = datetime.now()
+        
         # Initialize history on startup so charts aren't empty
         self._initialize_dummy_history()
+
+    def _broadcast_news(self, message):
+        """Broadcasts breaking news to the global chat"""
+        username = "SystemNews"
+        news_bot = User.get_by_username(username)
+        
+        if not news_bot:
+            try:
+                news_bot = User.register(
+                    username=username,
+                    password="secure_news_password_123",
+                    email="news@market.sim",
+                    full_name="Global Market News"
+                )
+            except Exception as e:
+                print(f"Error creating News user: {e}")
+                return
+                
+        try:
+            db.execute_insert(
+                "INSERT INTO chat_messages (user_id, username, message) VALUES (?, ?, ?)",
+                (news_bot.user_id, "🚨 BREAKING NEWS", message)
+            )
+        except Exception as e:
+            print(f"News broadcast error: {e}")
+
+    def _check_and_trigger_news(self):
+        """Randomly triggers global economic events"""
+        # Don't trigger if an admin has already forced a trend
+        if datetime.now() < self.trend_end_time:
+            return
+            
+        # Cooldown of 5 minutes between possible events
+        if (datetime.now() - self.last_event_time).total_seconds() < 300:
+            return
+            
+        # 5% chance to trigger an event when checked (checked every 10s by UI timer)
+        if random.random() > 0.05:
+            return
+            
+        self.last_event_time = datetime.now()
+        
+        events = [
+            {
+                'type': 'bull', 'duration': 120, 'target': 15.0,
+                'msg': "Central Bank slashes interest rates! Massive market rally expected across all sectors! 📈"
+            },
+            {
+                'type': 'bull', 'duration': 90, 'target': 8.0,
+                'msg': "Global unemployment hits record lows. Consumer confidence is soaring! 🚀"
+            },
+            {
+                'type': 'bear', 'duration': 120, 'target': -15.0,
+                'msg': "Unprecedented inflation data released! Investors are panicking. Market crash imminent! 📉"
+            },
+            {
+                'type': 'bear', 'duration': 90, 'target': -10.0,
+                'msg': "Global supply chain crisis escalates. Major corporations warning of massive losses. ⚠️"
+            }
+        ]
+        
+        event = random.choice(events)
+        self.set_market_trend(event['type'], event['duration'], event['target'])
+        self._broadcast_news(event['msg'])
+        print(f"Random Market Event Triggered: {event['type'].upper()}")
 
     def set_market_trend(self, trend_type, duration_seconds, target_percent):
         """
@@ -61,9 +130,7 @@ class MarketEngine:
             
             for company in companies:
                 base_price = company.share_price
-                
-                # --- GOLD LOGIC: Lower volatility for Gold ---
-                volatility = 0.01 if company.ticker_symbol == 'GOLD' else 0.05
+                volatility = 0.05 
                 
                 # Random trend for the last 24h
                 trend = random.choice([-1, 1]) * random.uniform(0.01, volatility)
@@ -74,7 +141,6 @@ class MarketEngine:
                     progress = (24 - i) / 24.0
                     price_at_point = start_price + (base_price - start_price) * progress
                     
-                    # Less noise for Gold
                     noise_factor = volatility / 2
                     noise = random.uniform(-noise_factor, noise_factor) * price_at_point
                     final_price = round(max(1.0, price_at_point + noise), 2)
@@ -95,9 +161,6 @@ class MarketEngine:
         current_price = company.share_price
         new_price = current_price
         
-        # Check if this company is Digital Gold
-        is_gold = (company.ticker_symbol == 'GOLD')
-        
         # --- 1. Base Logic (VWAP - Volume Weighted Average Price) ---
         query = """
             SELECT price_per_share, quantity 
@@ -109,8 +172,7 @@ class MarketEngine:
         
         if not trades:
             # No recent trades: Random drift
-            # Gold drifts less than stocks
-            volatility = 0.001 if is_gold else 0.005
+            volatility = 0.005
             drift = random.uniform(-volatility, volatility)
             new_price = current_price * (1 + drift)
         else:
@@ -124,26 +186,15 @@ class MarketEngine:
                 new_price = current_price + (gap * convergence)
                 
                 # Add noise
-                volatility = 0.001 if is_gold else 0.005
+                volatility = 0.005
                 noise = random.uniform(-volatility, volatility)
                 new_price = new_price * (1 + noise)
 
-        # --- 2. Apply Targeted Market Trend (Admin Control) ---
+        # --- 2. Apply Targeted Market Trend (News or Admin Control) ---
         if datetime.now() < self.trend_end_time:
-            if is_gold:
-                # GOLD LOGIC: Inverse Correlation
-                # If market is CRASHING (Bear), Gold goes UP (Safe Haven)
-                # If market is BOOMING (Bull), Gold stays flat or slight dip
-                if self.trend_type == 'bear':
-                    gold_boost = 1.002 # +0.2% per tick
-                    new_price = new_price * gold_boost
-                elif self.trend_type == 'bull':
-                    gold_drag = 0.999 # -0.1% per tick
-                    new_price = new_price * gold_drag
-            else:
-                # Regular stocks follow the trend
-                if self.trend_step_multiplier != 1.0:
-                    new_price = new_price * self.trend_step_multiplier
+            # Regular stocks follow the trend
+            if self.trend_step_multiplier != 1.0:
+                new_price = new_price * self.trend_step_multiplier
         else:
             # Reset trend if expired
             if self.trend_type != 'neutral':
@@ -155,6 +206,10 @@ class MarketEngine:
     
     def update_all_prices(self):
         """Update all prices (Called by Main Window Timer)"""
+        
+        # Check for random economic events first
+        self._check_and_trigger_news()
+        
         companies = Company.get_all()
         updated_count = 0
         

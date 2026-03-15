@@ -59,19 +59,45 @@ class ChatScreen(QWidget):
         
         html = ""
         for msg in messages:
-            time_str = msg['created_at'].strftime("%H:%M")
-            user_color = "#5DADE2" 
+            # Handle datetime objects safely
+            try:
+                time_str = msg['created_at'].strftime("%H:%M")
+            except AttributeError:
+                # Fallback if SQLite returns a raw string
+                time_str = str(msg['created_at'])[11:16] if len(str(msg['created_at'])) > 16 else "00:00"
+
+            display_name = msg['username']
+            msg_text = msg['message']
+            
+            # Default Colors
+            user_color = "#5DADE2" # Light Blue for other humans
+            msg_color = config.COLOR_TEXT # Default text color
             
             current_user = auth_service.get_current_user()
+            
+            # Check if this sender is a bot
+            is_bot = display_name.endswith("Bot")
+            
             if current_user and msg['username'] == current_user.username:
-                user_color = config.COLOR_SUCCESS
+                user_color = config.COLOR_SUCCESS # Green for YOU
+            elif is_bot:
+                user_color = config.COLOR_WARNING # Orange for BOTS
+                display_name = f"🤖 {display_name}"
                 
-            # Use distinct colors for username/message to stand out on dark bg
+                # Highlight Bot Sentiment Messages
+                if "🚀" in msg_text or "💰" in msg_text:
+                    msg_color = config.COLOR_SUCCESS # Bullish/Whale messages in green
+                elif "📉" in msg_text:
+                    msg_color = config.COLOR_DANGER # Bearish/Panic messages in red
+                
+            # Construct the HTML row
             html += f"<p style='margin: 4px 0;'><span style='color:#7f8c8d; font-size:11px;'>[{time_str}]</span> "
-            html += f"<span style='color:{user_color}; font-weight:bold;'>{msg['username']}:</span> "
-            html += f"<span style='color:#E0E0E0;'>{msg['message']}</span></p>"
+            html += f"<span style='color:{user_color}; font-weight:bold;'>{display_name}:</span> "
+            html += f"<span style='color:{msg_color};'>{msg_text}</span></p>"
             
         self.chat_display.setHtml(html)
+        
+        # Keep scrollbar at the bottom for new messages
         sb = self.chat_display.verticalScrollBar()
         sb.setValue(sb.maximum())
 
