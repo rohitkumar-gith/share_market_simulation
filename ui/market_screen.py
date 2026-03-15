@@ -1,12 +1,16 @@
 """
-Market Screen - Buy and Sell Shares (Updated for Custom Pricing)
+Market Screen - Buy and Sell Shares & Player Marketplace
 """
-from PyQt5.QtWidgets import *
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
+                             QTableWidget, QTableWidgetItem, QHeaderView, QListWidget, 
+                             QListWidgetItem, QMessageBox, QTabWidget, QComboBox, 
+                             QDialog, QFormLayout, QSpinBox, QDoubleSpinBox, QDialogButtonBox)
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QBrush, QColor
 from services.auth_service import auth_service
 from services.trading_service import trading_service
 from services.admin_service import admin_service 
+from services.asset_service import asset_service
 from trading.market_engine import market_engine
 from models.company import Company
 from utils.formatters import Formatter
@@ -120,15 +124,41 @@ class BuyOrderDialog(QDialog):
         return self.qty_spin.value(), self.price_spin.value()
 
 class MarketScreen(QWidget):
-    """Market screen for trading shares"""
+    """Market screen for trading shares and buying assets"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.init_ui()
     
     def init_ui(self):
-        """Initialize the UI"""
-        # Main Horizontal Layout (Split Screen)
+        """Initialize the Tabbed UI"""
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ border: 0; }}
+            QTabBar::tab {{ background: #2C2C2C; color: white; padding: 12px 25px; font-weight: bold; border-top-left-radius: 6px; border-top-right-radius: 6px; margin-right: 2px; font-size: 14px; }}
+            QTabBar::tab:selected {{ background: {config.COLOR_ACCENT}; }}
+        """)
+        
+        # Tab 1: Stocks
+        self.stock_widget = QWidget()
+        self.init_stock_tab()
+        self.tabs.addTab(self.stock_widget, "📈 Stock Market")
+        
+        # Tab 2: Assets & Marketplace
+        self.asset_widget = QWidget()
+        self.init_asset_tab()
+        self.tabs.addTab(self.asset_widget, "💎 Luxury Assets & Real Estate")
+        
+        layout.addWidget(self.tabs)
+        self.setLayout(layout)
+        
+        self.refresh_data()
+
+    def init_stock_tab(self):
+        """Build the original stock market split screen inside Tab 1"""
         main_layout = QHBoxLayout()
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(20)
@@ -136,32 +166,29 @@ class MarketScreen(QWidget):
         # --- LEFT COLUMN: MARKET TABLE ---
         left_layout = QVBoxLayout()
         
-        # Header with Title, Time Selector, and Trend Button
         header_layout = QHBoxLayout()
         
         title_layout = QVBoxLayout()
-        title = QLabel("Market")
+        title = QLabel("Stock Exchange")
         title.setFont(QFont('Arial', 24, QFont.Bold))
-        subtitle = QLabel("Buy & Sell Shares")
-        subtitle.setStyleSheet("color: #888; font-size: 12px;")
+        subtitle = QLabel("Buy & Sell Company Shares")
+        subtitle.setStyleSheet("color: #888; font-size: 14px;")
         title_layout.addWidget(title)
         title_layout.addWidget(subtitle)
         header_layout.addLayout(title_layout)
         
         header_layout.addStretch()
         
-        # --- NEW: Timeframe Selector ---
         self.timeframe_combo = QComboBox()
         self.timeframe_combo.addItems(["5 Min", "15 Min", "30 Min", "1 Hour", "24 Hours"])
-        self.timeframe_combo.setCurrentIndex(4) # Default to 24h
+        self.timeframe_combo.setCurrentIndex(4) 
         self.timeframe_combo.setFixedWidth(100)
-        self.timeframe_combo.currentIndexChanged.connect(self.refresh_table)
+        self.timeframe_combo.currentIndexChanged.connect(lambda idx: self.refresh_table())
         header_layout.addWidget(QLabel("View:"))
         header_layout.addWidget(self.timeframe_combo)
         
-        # Trend Button
         self.trend_btn = QPushButton("⚡ Set Trend")
-        self.trend_btn.setStyleSheet("background-color: #8E44AD; color: white; font-weight: bold; padding: 5px 15px;")
+        self.trend_btn.setStyleSheet("background-color: #8E44AD; color: white; font-weight: bold; padding: 8px 15px; border-radius: 4px;")
         self.trend_btn.clicked.connect(self.open_trend_dialog)
         header_layout.addWidget(self.trend_btn)
         
@@ -178,7 +205,6 @@ class MarketScreen(QWidget):
         
         left_layout.addWidget(self.companies_table)
         
-        # Add Left Column to Main (Flex 2/3)
         main_layout.addLayout(left_layout, 2)
         
         # --- RIGHT COLUMN: RECENT ACTIVITY ---
@@ -203,22 +229,196 @@ class MarketScreen(QWidget):
         """)
         right_layout.addWidget(self.activity_list)
         
-        # Add Right Column to Main (Flex 1/3)
         main_layout.addLayout(right_layout, 1)
         
-        self.setLayout(main_layout)
-        self.refresh_data()
-    
+        self.stock_widget.setLayout(main_layout)
+
+    def init_asset_tab(self):
+        """Build the new Luxury Asset Marketplace with Sub-Tabs"""
+        layout = QVBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        header_layout = QHBoxLayout()
+        title_layout = QVBoxLayout()
+        title = QLabel("Global Marketplace")
+        title.setFont(QFont('Arial', 24, QFont.Bold))
+        subtitle = QLabel("Buy brand new assets or trade directly with other players.")
+        subtitle.setStyleSheet("color: #888; font-size: 14px;")
+        title_layout.addWidget(title)
+        title_layout.addWidget(subtitle)
+        header_layout.addLayout(title_layout)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+        
+        # --- SUB-TAB SYSTEM FOR ASSETS ---
+        self.asset_sub_tabs = QTabWidget()
+        self.asset_sub_tabs.setStyleSheet("""
+            QTabBar::tab { background: #333; color: white; padding: 8px 20px; font-weight: bold; border-radius: 4px; margin: 2px;}
+            QTabBar::tab:selected { background: #E67E22; }
+        """)
+
+        # Sub-Tab 1: Official Store
+        self.official_store_widget = QWidget()
+        os_layout = QVBoxLayout(self.official_store_widget)
+        self.assets_table = QTableWidget()
+        self.assets_table.setColumnCount(6)
+        self.assets_table.setHorizontalHeaderLabels([
+            "Asset Name", "Type", "Description", "Price", "Passive Income", "Action"
+        ])
+        self.assets_table.horizontalHeader().setStretchLastSection(True)
+        self.assets_table.setAlternatingRowColors(True)
+        self.assets_table.verticalHeader().setDefaultSectionSize(60)
+        os_layout.addWidget(self.assets_table)
+        self.asset_sub_tabs.addTab(self.official_store_widget, "🏢 Official Store")
+
+        # Sub-Tab 2: Player Marketplace
+        self.player_market_widget = QWidget()
+        pm_layout = QVBoxLayout(self.player_market_widget)
+        self.p2p_table = QTableWidget()
+        self.p2p_table.setColumnCount(6)
+        self.p2p_table.setHorizontalHeaderLabels([
+            "Asset Name", "Seller", "Asking Price", "Passive Income", "Listed On", "Action"
+        ])
+        self.p2p_table.horizontalHeader().setStretchLastSection(True)
+        self.p2p_table.setAlternatingRowColors(True)
+        self.p2p_table.verticalHeader().setDefaultSectionSize(60)
+        pm_layout.addWidget(self.p2p_table)
+        self.asset_sub_tabs.addTab(self.player_market_widget, "🤝 Player Marketplace")
+
+        layout.addWidget(self.asset_sub_tabs)
+        self.asset_widget.setLayout(layout)
+
     def refresh_data(self):
-        """Refresh market data and activity feed"""
+        """Refresh all market data and assets"""
         self.refresh_table()
         self.refresh_activity()
+        self.refresh_official_store()
+        self.refresh_player_marketplace()
         
+    def refresh_official_store(self):
+        """Load brand new luxury assets from the master catalog"""
+        assets = asset_service.get_all_assets()
+        self.assets_table.setRowCount(len(assets))
+        
+        for row, asset in enumerate(assets):
+            name_item = QTableWidgetItem(asset['name'])
+            name_item.setFont(QFont('Arial', 11, QFont.Bold))
+            self.assets_table.setItem(row, 0, name_item)
+            
+            type_icon = "🏢 " if asset['asset_type'] == 'REAL_ESTATE' else "🏎️ "
+            self.assets_table.setItem(row, 1, QTableWidgetItem(f"{type_icon}{asset['asset_type']}"))
+            
+            self.assets_table.setItem(row, 2, QTableWidgetItem(asset['description']))
+            
+            price_item = QTableWidgetItem(Formatter.format_currency(asset['base_price']))
+            price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.assets_table.setItem(row, 3, price_item)
+            
+            if asset['revenue_rate'] > 0:
+                inc_text = f"+ {Formatter.format_currency(asset['revenue_rate'])} / min"
+                inc_item = QTableWidgetItem(inc_text)
+                inc_item.setForeground(QBrush(QColor(Qt.green)))
+            else:
+                inc_item = QTableWidgetItem("None (Flex Item)")
+                inc_item.setForeground(QBrush(QColor(Qt.lightGray)))
+            inc_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.assets_table.setItem(row, 4, inc_item)
+            
+            buy_btn = QPushButton("Buy New")
+            buy_btn.setStyleSheet(f"background-color: {config.COLOR_SECONDARY}; color: white; border-radius: 4px; padding: 8px; font-weight: bold;")
+            buy_btn.clicked.connect(lambda checked, a=asset: self.buy_official_asset(a))
+            self.assets_table.setCellWidget(row, 5, buy_btn)
+            
+        self.assets_table.resizeColumnsToContents()
+        self.assets_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+
+    def refresh_player_marketplace(self):
+        """Load active P2P listings from other players"""
+        listings = asset_service.get_marketplace_listings()
+        self.p2p_table.setRowCount(len(listings))
+        
+        current_user = auth_service.get_current_user()
+        
+        for row, listing in enumerate(listings):
+            name_item = QTableWidgetItem(listing['name'])
+            name_item.setFont(QFont('Arial', 11, QFont.Bold))
+            self.p2p_table.setItem(row, 0, name_item)
+            
+            seller_item = QTableWidgetItem(listing['seller_name'])
+            if current_user and current_user.user_id == listing['seller_id']:
+                seller_item.setText(f"{listing['seller_name']} (You)")
+                seller_item.setForeground(QBrush(QColor(Qt.cyan)))
+            self.p2p_table.setItem(row, 1, seller_item)
+            
+            price_item = QTableWidgetItem(Formatter.format_currency(listing['asking_price']))
+            price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.p2p_table.setItem(row, 2, price_item)
+            
+            if listing['revenue_rate'] > 0:
+                inc_text = f"+ {Formatter.format_currency(listing['revenue_rate'])} / min"
+                inc_item = QTableWidgetItem(inc_text)
+                inc_item.setForeground(QBrush(QColor(Qt.green)))
+            else:
+                inc_item = QTableWidgetItem("None (Flex Item)")
+                inc_item.setForeground(QBrush(QColor(Qt.lightGray)))
+            inc_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.p2p_table.setItem(row, 3, inc_item)
+            
+            try:
+                time_str = listing['created_at'].strftime("%Y-%m-%d %H:%M")
+            except AttributeError:
+                raw_time = str(listing['created_at'])
+                time_str = raw_time[:16]
+            self.p2p_table.setItem(row, 4, QTableWidgetItem(time_str))
+            
+            if current_user and current_user.user_id == listing['seller_id']:
+                btn = QPushButton("Your Listing")
+                btn.setEnabled(False)
+                btn.setStyleSheet("background-color: #555; color: #888; border-radius: 4px; padding: 8px;")
+            else:
+                btn = QPushButton("Buy from Player")
+                btn.setStyleSheet(f"background-color: {config.COLOR_SUCCESS}; color: white; border-radius: 4px; padding: 8px; font-weight: bold;")
+                btn.clicked.connect(lambda checked, l=listing: self.buy_p2p_asset(l))
+            self.p2p_table.setCellWidget(row, 5, btn)
+            
+        self.p2p_table.resizeColumnsToContents()
+
+    def buy_official_asset(self, asset):
+        """Handle buying from system store"""
+        reply = QMessageBox.question(
+            self, 'Confirm Purchase',
+            f"Buy the {asset['name']} for {Formatter.format_currency(asset['base_price'])}?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            user = auth_service.get_current_user()
+            result = asset_service.buy_asset_for_user(user.user_id, asset['asset_id'])
+            if result['success']:
+                QMessageBox.information(self, "Transaction Complete", result['message'])
+                self.refresh_data()
+            else:
+                QMessageBox.warning(self, "Transaction Failed", result['message'])
+
+    def buy_p2p_asset(self, listing):
+        """Handle buying from another player"""
+        reply = QMessageBox.question(
+            self, 'Confirm P2P Purchase',
+            f"Buy {listing['name']} from {listing['seller_name']} for {Formatter.format_currency(listing['asking_price'])}?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            user = auth_service.get_current_user()
+            result = asset_service.buy_marketplace_asset(user.user_id, listing['listing_id'])
+            if result['success']:
+                QMessageBox.information(self, "Purchase Successful", result['message'])
+                self.refresh_data()
+            else:
+                QMessageBox.warning(self, "Transaction Failed", result['message'])
+
     def refresh_table(self):
         companies = Company.get_all()
         self.companies_table.setRowCount(len(companies))
         
-        # Get selected timeframe in hours
         time_text = self.timeframe_combo.currentText()
         hours = 24.0
         if time_text == "5 Min": hours = 5 / 60
@@ -226,7 +426,6 @@ class MarketScreen(QWidget):
         elif time_text == "30 Min": hours = 30 / 60
         elif time_text == "1 Hour": hours = 1.0
         
-        # Update Header Label
         self.companies_table.setHorizontalHeaderItem(3, QTableWidgetItem(f"{time_text} Change"))
         
         for row, company in enumerate(companies):
@@ -237,18 +436,17 @@ class MarketScreen(QWidget):
             price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.companies_table.setItem(row, 2, price_item)
             
-            # Use dynamic hours
             change_data = market_engine.get_price_change(company.company_id, hours=hours)
             change_percent = change_data['change_percent']
             change_item = QTableWidgetItem(f"{change_percent:+.2f}%")
             change_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             
             if change_percent > 0:
-                change_item.setForeground(Qt.green)
+                change_item.setForeground(QBrush(QColor(Qt.green)))
             elif change_percent < 0:
-                change_item.setForeground(Qt.red)
+                change_item.setForeground(QBrush(QColor(Qt.red)))
             else:
-                change_item.setForeground(Qt.lightGray)
+                change_item.setForeground(QBrush(QColor(Qt.lightGray)))
             self.companies_table.setItem(row, 3, change_item)
 
             avail_item = QTableWidgetItem(Formatter.format_number(company.available_shares))
@@ -259,14 +457,12 @@ class MarketScreen(QWidget):
             cap_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.companies_table.setItem(row, 5, cap_item)
             
-            # Chart Button
             chart_btn = QPushButton("View Chart")
             chart_btn.setToolTip("Open Price History")
             chart_btn.setStyleSheet("background-color: #3498DB; color: white; border-radius: 4px; padding: 5px;")
             chart_btn.clicked.connect(lambda checked, c=company: self.show_chart(c))
             self.companies_table.setCellWidget(row, 6, chart_btn)
 
-            # Buy Button
             buy_btn = QPushButton("Buy Share")
             buy_btn.setStyleSheet(f"background-color: {config.COLOR_SUCCESS}; color: white; border-radius: 4px; padding: 5px;")
             buy_btn.clicked.connect(lambda checked, c=company: self.buy_shares(c))
@@ -275,7 +471,6 @@ class MarketScreen(QWidget):
         self.companies_table.resizeColumnsToContents()
 
     def refresh_activity(self):
-        """Fetch and display recent trades"""
         trades = db.get_recent_market_trades(limit=20)
         self.activity_list.clear()
         
@@ -284,41 +479,35 @@ class MarketScreen(QWidget):
             return
             
         for trade in trades:
-            time_str = trade['created_at'].strftime("%H:%M:%S")
+            try:
+                time_str = trade['created_at'].strftime("%H:%M:%S")
+            except AttributeError:
+                raw_time = str(trade['created_at'])
+                time_str = raw_time[11:19] if len(raw_time) > 11 else "00:00:00"
+
             ticker = trade['ticker_symbol']
             qty = trade['quantity']
             price = trade['price_per_share']
             buyer = trade['buyer_name']
-            
-            # Simple standard message
             text = f"[{time_str}] {buyer} bought {qty} {ticker} @ ₹{price}"
-            
-            item = QListWidgetItem(text)
-            self.activity_list.addItem(item)
+            self.activity_list.addItem(QListWidgetItem(text))
 
     def show_chart(self, company):
-        """Open chart window for company"""
-        # FIX: Pass company object, not just name/history
         chart = ChartWindow(company, self)
         chart.exec_()
     
     def open_trend_dialog(self):
-        """Open dialog to set market trend"""
         dialog = MarketTrendDialog(self)
         if dialog.exec_() == QDialog.Accepted:
             percent, duration = dialog.get_data()
             event_type = 'bull' if percent > 0 else 'bear'
-            
-            # Call Admin Service
             result = admin_service.trigger_market_event(event_type, duration, percent)
-            
             if result['success']:
                 QMessageBox.information(self, "Trend Started", result['message'])
             else:
                 QMessageBox.warning(self, "Error", result['message'])
 
     def buy_shares(self, company):
-        """Open Buy Dialog"""
         dialog = BuyOrderDialog(company, self)
         if dialog.exec_() == QDialog.Accepted:
             quantity, bid_price = dialog.get_data()
