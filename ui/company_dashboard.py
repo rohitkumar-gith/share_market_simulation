@@ -1,5 +1,5 @@
 """
-Company Dashboard - Manage companies, assets, finances, and corporate lending
+Company Dashboard - Manage companies, assets, finances, corporate lending, and Shareholders
 """
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt, QTimer
@@ -120,6 +120,7 @@ class CompanyDashboard(QWidget):
         self.tabs.addTab(self.create_finance_tab(), "💰 Finance & Dividends")
         self.tabs.addTab(self.create_ops_tab(), "🏭 Assets") 
         self.tabs.addTab(self.create_lending_tab(), "🏦 Corporate Lending")
+        self.tabs.addTab(self.create_shareholders_tab(), "👥 Shareholders") # NEW TAB
         self.tabs.addTab(self.create_settings_tab(), "⚙️ Settings")
         
         details_layout.addWidget(self.tabs)
@@ -214,20 +215,16 @@ class CompanyDashboard(QWidget):
         return widget
 
     def create_lending_tab(self):
-        """Redesigned Corporate Lending Tab using Sub-Tabs to prevent layout squishing"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        
         self.lending_sub_tabs = QTabWidget()
         self.lending_sub_tabs.setStyleSheet("""
             QTabBar::tab { background: #333; color: white; padding: 8px 15px; font-weight: bold; border-radius: 4px; margin: 2px;}
             QTabBar::tab:selected { background: #E67E22; }
         """)
         
-        # --- Sub-Tab 1: New Proposal ---
         proposal_tab = QWidget()
         prop_layout = QVBoxLayout(proposal_tab)
-        
         action_grp = QGroupBox("New Corporate Loan Proposal")
         form = QFormLayout()
         
@@ -266,7 +263,6 @@ class CompanyDashboard(QWidget):
         prop_layout.addStretch()
         self.lending_sub_tabs.addTab(proposal_tab, "📝 New Proposal")
         
-        # --- Sub-Tab 2: Incoming (Action Required) ---
         incoming_tab = QWidget()
         inc_layout = QVBoxLayout(incoming_tab)
         self.incoming_loans_table = QTableWidget()
@@ -278,7 +274,6 @@ class CompanyDashboard(QWidget):
         inc_layout.addWidget(self.incoming_loans_table)
         self.lending_sub_tabs.addTab(incoming_tab, "📥 Incoming (Action Needed)")
         
-        # --- Sub-Tab 3: Pending Outgoing ---
         outgoing_tab = QWidget()
         out_layout = QVBoxLayout(outgoing_tab)
         self.outgoing_loans_table = QTableWidget()
@@ -290,7 +285,6 @@ class CompanyDashboard(QWidget):
         out_layout.addWidget(self.outgoing_loans_table)
         self.lending_sub_tabs.addTab(outgoing_tab, "📤 Pending Outgoing")
         
-        # --- Sub-Tab 4: Active Portfolio ---
         portfolio_tab = QWidget()
         port_layout = QVBoxLayout(portfolio_tab)
         self.portfolio_table = QTableWidget()
@@ -305,10 +299,35 @@ class CompanyDashboard(QWidget):
         layout.addWidget(self.lending_sub_tabs)
         return widget
 
+    def create_shareholders_tab(self):
+        """NEW: Leaderboard of everyone invested in this company"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+        
+        title = QLabel("Top Investors")
+        title.setFont(QFont('Arial', 16, QFont.Bold))
+        layout.addWidget(title)
+        
+        info = QLabel("If an investor holds more shares than you, they will trigger a Hostile Takeover and seize the company!")
+        info.setStyleSheet("color: #C0392B; font-style: italic;") # Red warning
+        layout.addWidget(info)
+        
+        self.shareholders_table = QTableWidget()
+        self.shareholders_table.setColumnCount(5)
+        self.shareholders_table.setHorizontalHeaderLabels(["Rank", "Shareholder Name", "Shares Owned", "Ownership %", "Status"])
+        self.shareholders_table.horizontalHeader().setStretchLastSection(True)
+        self.shareholders_table.setAlternatingRowColors(True)
+        self.shareholders_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.shareholders_table.verticalHeader().setDefaultSectionSize(40)
+        
+        layout.addWidget(self.shareholders_table)
+        widget.setLayout(layout)
+        return widget
+
     def toggle_lending_form(self):
         if self.loan_action_combo.currentText() == "Request a Loan":
             self.loan_type_combo.setCurrentText("COMPANY")
-            self.loan_type_combo.setEnabled(False) # Can only ask companies for money
+            self.loan_type_combo.setEnabled(False)
             self.loan_submit_btn.setText("Send Request")
             self.loan_submit_btn.setStyleSheet(f"background-color: {config.COLOR_WARNING}; color: black; font-weight: bold; padding: 10px;")
         else:
@@ -375,6 +394,8 @@ class CompanyDashboard(QWidget):
         current_row = self.company_list.currentRow()
         
         self.company_list.clear()
+        
+        # When fetching companies, the service auto-checks for Hostile Takeovers!
         companies = company_service.get_user_companies(user.user_id)
         if not companies: self.company_list.addItem("You haven't started any companies yet.")
         else:
@@ -386,9 +407,14 @@ class CompanyDashboard(QWidget):
         if current_row >= 0 and current_row < self.company_list.count():
             self.company_list.setCurrentRow(current_row)
         
+        # If the user was viewing a company they just lost to a Hostile Takeover, kick them out!
         if self.current_company_id:
-            self.load_company_details(self.current_company_id)
-
+            still_owns = any(c['company_id'] == self.current_company_id for c in companies)
+            if not still_owns:
+                QMessageBox.critical(self, "Hostile Takeover!", "You have lost majority ownership of this company. It has been seized by another investor!")
+                self.go_back()
+            else:
+                self.load_company_details(self.current_company_id)
     def load_company_details(self, company_id):
         data = company_service.get_company_financial_summary(company_id)
         details = company_service.get_company_details(company_id)
@@ -427,12 +453,49 @@ class CompanyDashboard(QWidget):
             
         self.update_revenue_display()
         self.refresh_lending_tab()
+        
+        # Update Shareholders Table
+        shareholders = details.get('shareholders', [])
+        self.shareholders_table.setRowCount(len(shareholders))
+        
+        current_user = auth_service.get_current_user()
+        
+        for row, holder in enumerate(shareholders):
+            # FIX: Convert SQLite Row to a standard Python dictionary
+            h_dict = dict(holder)
+            
+            rank_item = QTableWidgetItem(f"#{row + 1}")
+            rank_item.setFont(QFont('Arial', 10, QFont.Bold))
+            rank_item.setTextAlignment(Qt.AlignCenter)
+            self.shareholders_table.setItem(row, 0, rank_item)
+            
+            name = h_dict['full_name']
+            if h_dict['username'].endswith('Bot'): name += " 🤖"
+            if current_user and h_dict['user_id'] == current_user.user_id: name += " (You)"
+            self.shareholders_table.setItem(row, 1, QTableWidgetItem(name))
+            
+            shares_item = QTableWidgetItem(Formatter.format_number(h_dict['quantity']))
+            shares_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.shareholders_table.setItem(row, 2, shares_item)
+            
+            # Now .get() will work perfectly!
+            total_issued = h_dict.get('total_issued_shares') or 1 
+            percent = (h_dict['quantity'] / total_issued) * 100 if total_issued > 0 else 0
+            
+            pct_item = QTableWidgetItem(f"{percent:.2f}%")
+            pct_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.shareholders_table.setItem(row, 3, pct_item)
+            
+            status = "Owner 👑" if row == 0 else "Investor"
+            status_item = QTableWidgetItem(status)
+            if row == 0: status_item.setForeground(QBrush(QColor("#D4AF37"))) # Gold for owner
+            self.shareholders_table.setItem(row, 4, status_item)
+   
 
     def refresh_lending_tab(self):
         if not self.current_company_id: return
         dash = company_service.get_company_lending_dashboard(self.current_company_id)
         
-        # Sub-Tab 2: Incoming Action Required
         self.incoming_loans_table.setRowCount(len(dash['action_required']))
         for row, loan in enumerate(dash['action_required']):
             l_type = "They Offered" if not loan['is_request'] else "They Requested"
@@ -452,7 +515,6 @@ class CompanyDashboard(QWidget):
             l.addWidget(btn_acc); l.addWidget(btn_rej)
             self.incoming_loans_table.setCellWidget(row, 3, w)
 
-        # Sub-Tab 3: Pending Outgoing
         self.outgoing_loans_table.setRowCount(len(dash['pending_outgoing']))
         for row, loan in enumerate(dash['pending_outgoing']):
             l_type = "We Offered" if not loan['is_request'] else "We Requested"
@@ -465,7 +527,6 @@ class CompanyDashboard(QWidget):
             btn_can.clicked.connect(lambda checked, ln=loan: self.action_loan(ln, "CANCEL"))
             self.outgoing_loans_table.setCellWidget(row, 3, btn_can)
 
-        # Sub-Tab 4: Active Portfolio
         self.portfolio_table.setRowCount(len(dash['portfolio']))
         for row, loan in enumerate(dash['portfolio']):
             self.portfolio_table.setItem(row, 0, QTableWidgetItem(loan['other_name']))

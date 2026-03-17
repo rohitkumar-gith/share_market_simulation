@@ -153,9 +153,11 @@ class MainWindow(QMainWindow):
         
         self.nav_buttons = {}
         
+        # --- NEW: Added Market Explorer to Nav Menu ---
         self.nav_items = [
             ("📊  Dashboard", "dashboard"),
             ("📈  Market", "market"),
+            ("🌍  Market Explorer", "explorer"), 
             ("💼  Portfolio", "portfolio"),
             ("📝  My Orders", "orders"),
             ("🏢  Companies", "companies"),
@@ -372,6 +374,7 @@ class MainWindow(QMainWindow):
         from ui.loan_screen import LoanScreen
         from ui.chat_screen import ChatScreen
         from ui.admin_screen import AdminScreen
+        from ui.market_explorer import MarketExplorerScreen # NEW IMPORT
         
         while self.content_stack.count() > 0:
             self.content_stack.removeWidget(self.content_stack.widget(0))
@@ -379,6 +382,7 @@ class MainWindow(QMainWindow):
         self.screens = {
             'dashboard': UserDashboard(self),
             'market': MarketScreen(self),
+            'explorer': MarketExplorerScreen(self), # ADDED EXPLORER
             'portfolio': PortfolioScreen(self),
             'orders': OrdersScreen(self),
             'companies': CompanyDashboard(self),
@@ -388,15 +392,22 @@ class MainWindow(QMainWindow):
             'admin': AdminScreen(self)
         }
         
-        for key in ['dashboard', 'market', 'portfolio', 'orders', 'companies', 'chat', 'wallet', 'loans', 'admin']:
+        # ADD WIDGETS TO STACK IN ORDER
+        ordered_keys = [
+            'dashboard', 'market', 'explorer', 'portfolio', 'orders', 
+            'companies', 'chat', 'wallet', 'loans', 'admin'
+        ]
+        
+        for key in ordered_keys:
             self.content_stack.addWidget(self.screens[key])
             
         self.switch_screen('dashboard')
     
     def switch_screen(self, screen_key):
+        # MAP KEYS TO STACK INDICES
         screen_indices = {
-            'dashboard': 0, 'market': 1, 'portfolio': 2, 'orders': 3,
-            'companies': 4, 'chat': 5, 'wallet': 6, 'loans': 7, 'admin': 8
+            'dashboard': 0, 'market': 1, 'explorer': 2, 'portfolio': 3, 'orders': 4,
+            'companies': 5, 'chat': 6, 'wallet': 7, 'loans': 8, 'admin': 9
         }
         
         if screen_key in screen_indices:
