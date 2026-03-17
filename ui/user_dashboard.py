@@ -1,11 +1,12 @@
 """
-User Dashboard - Overview of user's status
+User Dashboard - Billionaire's Row, Global Leaderboard, and Market Overview
 """
 from PyQt5.QtWidgets import *
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtGui import QFont, QColor, QBrush
 from services.auth_service import auth_service
 from services.trading_service import trading_service
+from database.db_manager import db
 from utils.formatters import Formatter
 import config
 
@@ -20,35 +21,90 @@ class UserDashboard(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(20)
         
+        # --- HEADER ---
         self.welcome_label = QLabel("Welcome back!")
         self.welcome_label.setFont(QFont('Arial', 24, QFont.Bold))
+        self.welcome_label.setStyleSheet(f"color: {config.COLOR_ACCENT};")
         layout.addWidget(self.welcome_label)
         
+        # --- TOP: PERSONAL SUMMARY CARDS ---
         cards_layout = QHBoxLayout()
-        cards_layout.setSpacing(20)
+        cards_layout.setSpacing(15)
         
-        self.net_worth_card = self.create_summary_card("Net Worth", "₹0.00", "#2980B9")
-        self.wallet_card = self.create_summary_card("Wallet Balance", "₹0.00", "#27AE60")
-        self.portfolio_card = self.create_summary_card("Portfolio Value", "₹0.00", "#8E44AD")
+        self.net_worth_card = self.create_summary_card("True Net Worth", "₹0.00", "#D4AF37") # Gold
+        self.wallet_card = self.create_summary_card("Liquid Cash (Wallet)", "₹0.00", "#27AE60") # Green
+        self.assets_card = self.create_summary_card("Total Assets (Stocks & Real Estate)", "₹0.00", "#8E44AD") # Purple
+        self.debt_card = self.create_summary_card("Total Debt (Bank & Corp)", "₹0.00", "#C0392B") # Red
         
         cards_layout.addWidget(self.net_worth_card)
         cards_layout.addWidget(self.wallet_card)
-        cards_layout.addWidget(self.portfolio_card)
+        cards_layout.addWidget(self.assets_card)
+        cards_layout.addWidget(self.debt_card)
         
         layout.addLayout(cards_layout)
         
-        layout.addSpacing(10)
-        trending_label = QLabel("🔥 Trending Stocks (24h Volume)")
-        trending_label.setFont(QFont('Arial', 16, QFont.Bold))
-        layout.addWidget(trending_label)
+        # --- BOTTOM: SPLIT VIEW (LEADERBOARD & TRENDING) ---
+        split_layout = QHBoxLayout()
+        split_layout.setSpacing(20)
         
+        # LEFT: Billionaire's Row
+        leaderboard_layout = QVBoxLayout()
+        leader_title = QLabel("🏆 Billionaire's Row (Global Leaderboard)")
+        leader_title.setFont(QFont('Arial', 18, QFont.Bold))
+        leaderboard_layout.addWidget(leader_title)
+        
+        self.leaderboard_table = QTableWidget()
+        self.leaderboard_table.setColumnCount(4)
+        self.leaderboard_table.setHorizontalHeaderLabels(["Rank", "Player / Bot", "Entity", "True Net Worth"])
+        self.leaderboard_table.horizontalHeader().setStretchLastSection(True)
+        self.leaderboard_table.setAlternatingRowColors(True)
+        self.leaderboard_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.leaderboard_table.verticalHeader().setDefaultSectionSize(45)
+        self.leaderboard_table.setStyleSheet("QTableWidget { background-color: #1E1E1E; border-radius: 8px; }")
+        leaderboard_layout.addWidget(self.leaderboard_table)
+        
+        split_layout.addLayout(leaderboard_layout, 6) # 60% width
+        
+        # RIGHT: Market Overview (Tabbed)
+        market_layout = QVBoxLayout()
+        market_title = QLabel("📊 Market Overview")
+        market_title.setFont(QFont('Arial', 18, QFont.Bold))
+        market_layout.addWidget(market_title)
+        
+        self.market_tabs = QTabWidget()
+        self.market_tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ border: 0; }}
+            QTabBar::tab {{ background: #2C2C2C; color: white; padding: 10px 20px; font-weight: bold; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; }}
+            QTabBar::tab:selected {{ background: {config.COLOR_ACCENT}; }}
+        """)
+        
+        # Right Tab 1: Top Companies by Price
+        self.top_companies_table = QTableWidget()
+        self.top_companies_table.setColumnCount(4)
+        self.top_companies_table.setHorizontalHeaderLabels(["Rank", "Ticker", "Share Price", "Market Cap"])
+        self.top_companies_table.horizontalHeader().setStretchLastSection(True)
+        self.top_companies_table.setAlternatingRowColors(True)
+        self.top_companies_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.top_companies_table.verticalHeader().setDefaultSectionSize(45)
+        self.top_companies_table.setStyleSheet("QTableWidget { background-color: #1E1E1E; border-radius: 8px; }")
+        self.market_tabs.addTab(self.top_companies_table, "💎 Highest Valued")
+        
+        # Right Tab 2: Trending by Volume
         self.trending_table = QTableWidget()
         self.trending_table.setColumnCount(4)
-        self.trending_table.setHorizontalHeaderLabels(["Company", "Price", "Volume", "Trend"])
+        self.trending_table.setHorizontalHeaderLabels(["Ticker", "Price", "Volume", "Trend"])
         self.trending_table.horizontalHeader().setStretchLastSection(True)
         self.trending_table.setAlternatingRowColors(True)
         self.trending_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        layout.addWidget(self.trending_table)
+        self.trending_table.verticalHeader().setDefaultSectionSize(45)
+        self.trending_table.setStyleSheet("QTableWidget { background-color: #1E1E1E; border-radius: 8px; }")
+        self.market_tabs.addTab(self.trending_table, "🔥 Trending Vol")
+        
+        market_layout.addWidget(self.market_tabs)
+        
+        split_layout.addLayout(market_layout, 4) # 40% width
+        
+        layout.addLayout(split_layout)
         
         self.setLayout(layout)
         self.refresh_data()
@@ -60,62 +116,200 @@ class UserDashboard(QWidget):
         
         layout = QVBoxLayout()
         title_lbl = QLabel(title)
-        title_lbl.setStyleSheet("color: rgba(255, 255, 255, 0.8); font-size: 14px;")
+        title_lbl.setStyleSheet("color: rgba(255, 255, 255, 0.9); font-size: 13px; font-weight: bold;")
         value_lbl = QLabel(value)
-        value_lbl.setStyleSheet("color: white; font-size: 24px; font-weight: bold;")
+        value_lbl.setStyleSheet("color: white; font-size: 22px; font-weight: bold;")
         value_lbl.setAlignment(Qt.AlignRight)
         
         layout.addWidget(title_lbl)
         layout.addWidget(value_lbl)
         card.setLayout(layout)
         
-        if title == "Net Worth": self.net_worth_val = value_lbl
-        elif title == "Wallet Balance": self.wallet_val = value_lbl
-        elif title == "Portfolio Value": self.portfolio_val = value_lbl
+        if title == "True Net Worth": self.net_worth_val = value_lbl
+        elif title == "Liquid Cash (Wallet)": self.wallet_val = value_lbl
+        elif "Assets" in title: self.assets_val = value_lbl
+        elif "Debt" in title: self.debt_val = value_lbl
             
         return card
 
+    def calculate_global_wealth(self):
+        """Calculates True Net Worth for every user and bot in the system"""
+        users = db.execute_query("SELECT user_id, username, full_name, wallet_balance FROM users")
+        leaderboard = []
+        
+        for u in users:
+            uid = u['user_id']
+            cash = u['wallet_balance']
+            total_assets = 0.0
+            total_debt = 0.0
+
+            # 1. Stock Portfolio Value
+            stocks = db.execute_query("""
+                SELECT SUM(uh.quantity * c.share_price) as stock_val
+                FROM user_holdings uh
+                JOIN companies c ON uh.company_id = c.company_id
+                WHERE uh.user_id = ?
+            """, (uid,))
+            if stocks and stocks[0]['stock_val']:
+                total_assets += stocks[0]['stock_val']
+
+            # 2. Luxury Assets Value
+            assets = db.execute_query("SELECT SUM(acquired_price) as asset_val FROM owned_assets WHERE owner_id = ? AND owner_type = 'USER'", (uid,))
+            if assets and assets[0]['asset_val']:
+                total_assets += assets[0]['asset_val']
+
+            # 3. Bank Debt
+            loans = db.execute_query("SELECT SUM(remaining_balance) as debt FROM loans WHERE user_id = ? AND status = 'active'", (uid,))
+            if loans and loans[0]['debt']:
+                total_debt += loans[0]['debt']
+
+            # 4. Corporate Debt
+            corp_loans = db.execute_query("SELECT SUM(remaining_balance) as corp_debt FROM company_user_loans WHERE borrower_user_id = ? AND status = 'ACTIVE'", (uid,))
+            if corp_loans and corp_loans[0]['corp_debt']:
+                total_debt += corp_loans[0]['corp_debt']
+
+            true_net_worth = cash + total_assets - total_debt
+            is_bot = u['username'].endswith('Bot')
+
+            leaderboard.append({
+                'user_id': uid,
+                'name': u['full_name'],
+                'type': "🤖 AI Bot" if is_bot else "👤 Player",
+                'is_bot': is_bot,
+                'cash': cash,
+                'assets': total_assets,
+                'debt': total_debt,
+                'net_worth': true_net_worth
+            })
+
+        # Sort by richest first
+        leaderboard.sort(key=lambda x: x['net_worth'], reverse=True)
+        return leaderboard
+
     def refresh_data(self):
-        user = auth_service.get_current_user()
-        if not user: return
+        current_user = auth_service.get_current_user()
+        if not current_user: return
             
-        self.welcome_label.setText(f"Welcome back, {user.full_name}!")
+        self.welcome_label.setText(f"Welcome back, {current_user.full_name}!")
         
-        # FIX: get_net_worth is a float
-        net_worth = user.get_net_worth() 
-        portfolio = user.get_portfolio()
+        # --- 1. PROCESS GLOBAL LEADERBOARD & PERSONAL STATS ---
+        leaderboard = self.calculate_global_wealth()
         
-        self.net_worth_val.setText(Formatter.format_currency(net_worth))
-        self.wallet_val.setText(Formatter.format_currency(user.wallet_balance))
-        self.portfolio_val.setText(Formatter.format_currency(portfolio['total_current_value']))
+        # Update Personal Cards based on the global scan
+        for data in leaderboard:
+            if data['user_id'] == current_user.user_id:
+                self.net_worth_val.setText(Formatter.format_currency(data['net_worth']))
+                self.wallet_val.setText(Formatter.format_currency(data['cash']))
+                self.assets_val.setText(Formatter.format_currency(data['assets']))
+                self.debt_val.setText(Formatter.format_currency(data['debt']))
+                break
+                
+        # Populate Leaderboard Table
+        self.leaderboard_table.setRowCount(len(leaderboard))
+        for row, p in enumerate(leaderboard):
+            if row == 0: rank_str = "🥇 #1"
+            elif row == 1: rank_str = "🥈 #2"
+            elif row == 2: rank_str = "🥉 #3"
+            else: rank_str = f"#{row + 1}"
+            
+            rank_item = QTableWidgetItem(rank_str)
+            rank_item.setFont(QFont('Arial', 12, QFont.Bold))
+            rank_item.setTextAlignment(Qt.AlignCenter)
+            self.leaderboard_table.setItem(row, 0, rank_item)
+            
+            name_item = QTableWidgetItem(p['name'])
+            name_item.setFont(QFont('Arial', 11, QFont.Bold))
+            if p['user_id'] == current_user.user_id:
+                name_item.setForeground(QBrush(QColor(Qt.cyan)))
+                name_item.setText(f"{p['name']} (You)")
+            self.leaderboard_table.setItem(row, 1, name_item)
+            
+            type_item = QTableWidgetItem(p['type'])
+            if p['is_bot']: type_item.setForeground(QBrush(QColor(Qt.lightGray)))
+            self.leaderboard_table.setItem(row, 2, type_item)
+            
+            nw_item = QTableWidgetItem(Formatter.format_currency(p['net_worth']))
+            nw_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            nw_item.setFont(QFont('Arial', 11, QFont.Bold))
+            if p['net_worth'] >= 0:
+                nw_item.setForeground(QBrush(QColor(Qt.green)))
+            else:
+                nw_item.setForeground(QBrush(QColor(Qt.red)))
+            self.leaderboard_table.setItem(row, 3, nw_item)
+            
+        self.leaderboard_table.resizeColumnsToContents()
         
-        trending = trading_service.get_trending_stocks(limit=5)
+        # --- 2. PROCESS TOP COMPANIES BY PRICE ---
+        top_companies = db.execute_query("SELECT ticker_symbol, share_price, total_shares FROM companies ORDER BY share_price DESC LIMIT 10")
+        if top_companies:
+            self.top_companies_table.setRowCount(len(top_companies))
+            for row, comp in enumerate(top_companies):
+                # Rank
+                rank_item = QTableWidgetItem(f"#{row + 1}")
+                rank_item.setFont(QFont('Arial', 11, QFont.Bold))
+                rank_item.setTextAlignment(Qt.AlignCenter)
+                if row == 0: rank_item.setForeground(QBrush(QColor("#D4AF37")))
+                elif row == 1: rank_item.setForeground(QBrush(QColor("#C0C0C0")))
+                elif row == 2: rank_item.setForeground(QBrush(QColor("#CD7F32")))
+                self.top_companies_table.setItem(row, 0, rank_item)
+                
+                # Ticker
+                t_item = QTableWidgetItem(comp['ticker_symbol'])
+                t_item.setFont(QFont('Arial', 11, QFont.Bold))
+                self.top_companies_table.setItem(row, 1, t_item)
+                
+                # Price
+                price_item = QTableWidgetItem(Formatter.format_currency(comp['share_price']))
+                price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                price_item.setForeground(QBrush(QColor(Qt.green)))
+                self.top_companies_table.setItem(row, 2, price_item)
+                
+                # Market Cap
+                mcap = comp['share_price'] * comp['total_shares']
+                mcap_item = QTableWidgetItem(Formatter.format_currency(mcap))
+                mcap_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.top_companies_table.setItem(row, 3, mcap_item)
+                
+            self.top_companies_table.resizeColumnsToContents()
+
+        # --- 3. PROCESS TRENDING STOCKS ---
+        trending = trading_service.get_trending_stocks(limit=10)
         self.trending_table.setRowCount(len(trending))
         
         for row, item in enumerate(trending):
             company = item['company']
             
-            # Handle company dict/obj duality
             if isinstance(company, dict):
-                c_name = company['company_name']
                 c_ticker = company['ticker_symbol']
                 c_price = company['share_price']
             else:
-                c_name = company.company_name
                 c_ticker = company.ticker_symbol
                 c_price = company.share_price
 
             volume = item['volume']
             
-            self.trending_table.setItem(row, 0, QTableWidgetItem(f"{c_name} ({c_ticker})"))
+            t_item = QTableWidgetItem(c_ticker)
+            t_item.setFont(QFont('Arial', 11, QFont.Bold))
+            self.trending_table.setItem(row, 0, t_item)
             
             price_item = QTableWidgetItem(Formatter.format_currency(c_price))
             price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.trending_table.setItem(row, 1, price_item)
             
-            vol_item = QTableWidgetItem(str(volume))
+            vol_item = QTableWidgetItem(Formatter.format_number(volume))
             vol_item.setTextAlignment(Qt.AlignCenter)
             self.trending_table.setItem(row, 2, vol_item)
             
-            trend_item = QTableWidgetItem("High Activity" if volume > 1000 else "Moderate")
+            if volume > 5000:
+                trend_str = "🔥 Hot"
+                trend_color = Qt.red
+            elif volume > 1000:
+                trend_str = "📈 Active"
+                trend_color = Qt.green
+            else:
+                trend_str = "Stable"
+                trend_color = Qt.lightGray
+                
+            trend_item = QTableWidgetItem(trend_str)
+            trend_item.setForeground(QBrush(QColor(trend_color)))
             self.trending_table.setItem(row, 3, trend_item)

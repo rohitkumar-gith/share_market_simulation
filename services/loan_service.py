@@ -77,7 +77,38 @@ class LoanService:
                 'success': False,
                 'message': str(e)
             }
-    
+            
+    # --- ADDED FOR NEW UI COMPATIBILITY ---
+    @staticmethod
+    def pay_loan_installment(user_id, loan_id):
+        """Adapter for UI: Pay a single monthly EMI"""
+        try:
+            loan = Loan.get_by_id(loan_id)
+            if not loan:
+                return {'success': False, 'message': "Loan not found"}
+                
+            payment_amount = loan.monthly_payment
+            if loan.remaining_balance < payment_amount:
+                payment_amount = loan.remaining_balance
+                
+            return LoanService.make_payment(loan_id, user_id, payment_amount)
+        except Exception as e:
+            return {'success': False, 'message': str(e)}
+            
+    @staticmethod
+    def payoff_loan_completely(user_id, loan_id):
+        """Adapter for UI: Pay off the entire remaining balance"""
+        try:
+            loan = Loan.get_by_id(loan_id)
+            if not loan:
+                return {'success': False, 'message': "Loan not found"}
+                
+            payment_amount = loan.remaining_balance
+            return LoanService.make_payment(loan_id, user_id, payment_amount)
+        except Exception as e:
+            return {'success': False, 'message': str(e)}
+    # --------------------------------------
+
     @staticmethod
     def get_user_loans(user_id):
         """Get all user loans"""
