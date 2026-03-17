@@ -10,11 +10,12 @@ from services.auth_service import auth_service
 from trading.market_engine import market_engine
 from trading.bot_trader import bot_trader
 from trading.order_matcher import order_matcher
+from services.commodity_service import commodity_service # NEW IMPORT
 from utils.formatters import Formatter
 import config
 import time
 
-# --- NEW: Background Worker for Bots ---
+# --- Background Worker for Bots ---
 class BotWorker(QThread):
     """Runs trading bots in a separate thread to prevent UI freezing"""
     trades_executed = pyqtSignal(int)  # Signal to update UI with trade count
@@ -35,15 +36,14 @@ class BotWorker(QThread):
                 if count > 0:
                     self.trades_executed.emit(count)
                 
-                # Wait before next cycle (Configuration defined interval)
-                # We break the sleep into small chunks to allow fast stopping
+                # Wait before next cycle
                 for _ in range(config.BOT_TRADING_INTERVAL): 
                     if not self.is_running: break
                     time.sleep(1) 
                     
             except Exception as e:
                 print(f"Bot Worker Error: {e}")
-                time.sleep(5) # specific error backoff
+                time.sleep(5) 
 
     def stop(self):
         self.is_running = False
@@ -55,7 +55,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.current_user = None
-        self.bot_thread = None # Initialize variable
+        self.bot_thread = None 
         self.init_ui()
         self.setup_timers()
     
@@ -153,11 +153,12 @@ class MainWindow(QMainWindow):
         
         self.nav_buttons = {}
         
-        # --- NEW: Added Market Explorer to Nav Menu ---
+        # --- ADDED COMMODITIES TO NAV MENU ---
         self.nav_items = [
             ("📊  Dashboard", "dashboard"),
             ("📈  Market", "market"),
-            ("🌍  Market Explorer", "explorer"), 
+            ("🌍  Market Explorer", "explorer"),
+            ("🪙  Commodities", "commodities"), 
             ("💼  Portfolio", "portfolio"),
             ("📝  My Orders", "orders"),
             ("🏢  Companies", "companies"),
@@ -306,8 +307,6 @@ class MainWindow(QMainWindow):
                 self.bot_thread.stop()
         except: pass
 
-        # --- SPEED OPTIMIZATION ---
-        
         # 1. Market Engine (10s - Price updates)
         self.market_timer = QTimer()
         self.market_timer.timeout.connect(self.update_market_prices)
@@ -329,12 +328,12 @@ class MainWindow(QMainWindow):
         self.ui_timer.start(5000)
     
     def on_bot_activity(self, count):
-        """Called when bots execute trades in background"""
         self.status_bar.showMessage(f"🤖 Market Active: {count} bot trades executed recently", 3000)
 
     def update_market_prices(self):
         try:
             market_engine.update_all_prices()
+            commodity_service.update_market_prices() # --- UPDATES METAL PRICES ---
         except: pass
     
     def match_orders(self):
@@ -374,7 +373,8 @@ class MainWindow(QMainWindow):
         from ui.loan_screen import LoanScreen
         from ui.chat_screen import ChatScreen
         from ui.admin_screen import AdminScreen
-        from ui.market_explorer import MarketExplorerScreen # NEW IMPORT
+        from ui.market_explorer import MarketExplorerScreen
+        from ui.commodity_screen import CommodityScreen # NEW IMPORT
         
         while self.content_stack.count() > 0:
             self.content_stack.removeWidget(self.content_stack.widget(0))
@@ -382,7 +382,8 @@ class MainWindow(QMainWindow):
         self.screens = {
             'dashboard': UserDashboard(self),
             'market': MarketScreen(self),
-            'explorer': MarketExplorerScreen(self), # ADDED EXPLORER
+            'explorer': MarketExplorerScreen(self),
+            'commodities': CommodityScreen(self), # ADDED COMMODITIES
             'portfolio': PortfolioScreen(self),
             'orders': OrdersScreen(self),
             'companies': CompanyDashboard(self),
@@ -392,9 +393,9 @@ class MainWindow(QMainWindow):
             'admin': AdminScreen(self)
         }
         
-        # ADD WIDGETS TO STACK IN ORDER
+        # MUST MATCH THE NAV MENU ORDER
         ordered_keys = [
-            'dashboard', 'market', 'explorer', 'portfolio', 'orders', 
+            'dashboard', 'market', 'explorer', 'commodities', 'portfolio', 'orders', 
             'companies', 'chat', 'wallet', 'loans', 'admin'
         ]
         
@@ -404,10 +405,10 @@ class MainWindow(QMainWindow):
         self.switch_screen('dashboard')
     
     def switch_screen(self, screen_key):
-        # MAP KEYS TO STACK INDICES
+        # MAPPED TO THE EXACT INDEX OF ordered_keys
         screen_indices = {
-            'dashboard': 0, 'market': 1, 'explorer': 2, 'portfolio': 3, 'orders': 4,
-            'companies': 5, 'chat': 6, 'wallet': 7, 'loans': 8, 'admin': 9
+            'dashboard': 0, 'market': 1, 'explorer': 2, 'commodities': 3, 'portfolio': 4, 
+            'orders': 5, 'companies': 6, 'chat': 7, 'wallet': 8, 'loans': 9, 'admin': 10
         }
         
         if screen_key in screen_indices:
@@ -431,7 +432,6 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             auth_service.logout()
             
-            # STOP THREADS PROPERLY
             if self.bot_thread: self.bot_thread.stop()
             self.market_timer.stop()
             self.order_timer.stop()
@@ -446,7 +446,6 @@ class MainWindow(QMainWindow):
     def on_login_success(self):
         self.update_user_info()
         self.load_screens()
-        # RESTART THREADS/TIMERS
         self.setup_timers()
         self.showMaximized()
     
