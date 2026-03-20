@@ -98,11 +98,13 @@ class ListAssetDialog(QDialog):
     def init_ui(self):
         layout = QVBoxLayout()
         info_layout = QFormLayout()
-        info_layout.addRow("Asset:", QLabel(self.asset['name']))
-        info_layout.addRow("You Paid:", QLabel(Formatter.format_currency(self.asset['acquired_price'])))
+        # SHOW STACK INFO IN DIALOG
+        qty = self.asset.get('quantity', 1)
+        info_layout.addRow("Asset Stack:", QLabel(f"{qty}x {self.asset['name']}"))
+        info_layout.addRow("You Paid (Total):", QLabel(Formatter.format_currency(self.asset['acquired_price'])))
         layout.addLayout(info_layout)
         
-        layout.addWidget(QLabel("<b>Set Marketplace Asking Price</b>"))
+        layout.addWidget(QLabel("<b>Set Marketplace Asking Price (For Entire Stack)</b>"))
         self.price_spin = QDoubleSpinBox()
         self.price_spin.setRange(1.0, 999999999.0)
         
@@ -199,9 +201,9 @@ class PortfolioScreen(QWidget):
         layout.addLayout(income_layout)
         
         self.assets_table = QTableWidget()
-        self.assets_table.setColumnCount(5)
+        self.assets_table.setColumnCount(7) # INCREASED TO 7 TO SHOW STACKS AND USES!
         self.assets_table.setHorizontalHeaderLabels([
-            "Asset Name", "Type", "Acquired Price", "Status", "Marketplace Action"
+            "Asset Name", "Type", "Stack Qty", "Uses Remaining", "Acquired Price", "Market Status", "Actions"
         ])
         self.assets_table.horizontalHeader().setStretchLastSection(True)
         self.assets_table.setAlternatingRowColors(True)
@@ -267,6 +269,16 @@ class PortfolioScreen(QWidget):
         self.holdings_table.resizeColumnsToContents()
         self.total_value_lbl.setText(f"Total Stock Value: {Formatter.format_currency(total_portfolio_value)}")
 
+    def get_rarity_color(self, rarity):
+        colors = {
+            "Common": "#FFFFFF",      # White
+            "Uncommon": "#1EFF00",    # Green
+            "Rare": "#0070DD",        # Blue
+            "Epic": "#A335EE",        # Purple
+            "Legendary": "#FF8000"    # Orange
+        }
+        return colors.get(rarity, "#FFFFFF")
+
     def refresh_assets(self):
         user = auth_service.get_current_user()
         if not user: return
@@ -279,27 +291,59 @@ class PortfolioScreen(QWidget):
         self.assets_table.setRowCount(len(assets))
         
         for row, asset in enumerate(assets):
-            name_item = QTableWidgetItem(asset['name'])
+            # 1. Name & Rarity Badge
+            rarity = asset.get('rarity', 'Common')
+            name_str = f"[{rarity}] {asset['name']}"
+            name_item = QTableWidgetItem(name_str)
             name_item.setFont(QFont('Arial', 11, QFont.Bold))
+            name_item.setForeground(QBrush(QColor(self.get_rarity_color(rarity))))
             self.assets_table.setItem(row, 0, name_item)
             
-            type_icon = "🏢 " if asset['asset_type'] == 'REAL_ESTATE' else "🏎️ "
-            self.assets_table.setItem(row, 1, QTableWidgetItem(f"{type_icon}{asset['asset_type']}"))
+            # 2. Type Icon
+            type_map = {
+                'REAL_ESTATE': '🏢 ', 'CAR': '🏎️ ', 
+                'CONSUMABLE': '🚬 ', 'ITEM': '📦 ', 'LUXURY': '💎 '
+            }
+            icon = type_map.get(asset['asset_type'], '🔹 ')
+            self.assets_table.setItem(row, 1, QTableWidgetItem(f"{icon}{asset['asset_type']}"))
             
+            # 3. Stack Quantity
+            qty = asset.get('quantity', 1)
+            qty_item = QTableWidgetItem(f"x {qty}")
+            qty_item.setFont(QFont('Arial', 11, QFont.Bold))
+            qty_item.setTextAlignment(Qt.AlignCenter)
+            self.assets_table.setItem(row, 2, qty_item)
+
+            # 4. Uses Remaining
+            uses = asset.get('remaining_uses', -1)
+            uses_str = "Infinite" if uses == -1 else str(uses)
+            uses_item = QTableWidgetItem(uses_str)
+            uses_item.setTextAlignment(Qt.AlignCenter)
+            if uses != -1 and uses <= 3:
+                uses_item.setForeground(QBrush(QColor(Qt.red))) # Warn if uses are low!
+            self.assets_table.setItem(row, 3, uses_item)
+
+            # 5. Price
             acq_item = QTableWidgetItem(Formatter.format_currency(asset['acquired_price']))
-            self.assets_table.setItem(row, 2, acq_item)
+            self.assets_table.setItem(row, 4, acq_item)
             
             is_listed = asset['listed_price'] is not None
             
-            # --- NEW DYNAMIC ACTION PANEL ---
+            # 6. Status
+            if is_listed:
+                status_item = QTableWidgetItem(f"Listed for {Formatter.format_currency(asset['listed_price'])}")
+                status_item.setForeground(QBrush(QColor(Qt.yellow)))
+            else:
+                status_item = QTableWidgetItem("In Inventory")
+                status_item.setForeground(QBrush(QColor(Qt.green)))
+            self.assets_table.setItem(row, 5, status_item)
+
+            # 7. Action Panel (Use, List, Edit, Cancel)
             action_widget = QWidget()
             action_layout = QHBoxLayout(action_widget)
             action_layout.setContentsMargins(5, 5, 5, 5)
             
             if is_listed:
-                status_item = QTableWidgetItem(f"Listed for {Formatter.format_currency(asset['listed_price'])}")
-                status_item.setForeground(QBrush(QColor(Qt.yellow)))
-                
                 edit_btn = QPushButton("Edit Price")
                 edit_btn.setStyleSheet("background-color: #3498DB; color: white; border-radius: 4px; padding: 5px;")
                 edit_btn.clicked.connect(lambda checked, a=asset: self.edit_listing(a))
@@ -311,18 +355,55 @@ class PortfolioScreen(QWidget):
                 action_layout.addWidget(edit_btn)
                 action_layout.addWidget(cancel_btn)
             else:
-                status_item = QTableWidgetItem("In Garage / Property Owned")
-                status_item.setForeground(QBrush(QColor(Qt.green)))
+                # Add USE ITEM button
+                use_btn = QPushButton("Use Item")
+                use_btn.setStyleSheet("background-color: #8E44AD; color: white; border-radius: 4px; padding: 5px; font-weight: bold;")
+                use_btn.clicked.connect(lambda checked, a=asset: self.use_asset_action(a))
+                action_layout.addWidget(use_btn)
                 
-                list_btn = QPushButton("List For Sale")
-                list_btn.setStyleSheet(f"background-color: {config.COLOR_SECONDARY}; color: white; border-radius: 4px; padding: 5px; font-weight: bold;")
+                # Add LIST FOR SALE button
+                list_btn = QPushButton("List Stack")
+                list_btn.setStyleSheet(f"background-color: {config.COLOR_SECONDARY}; color: white; border-radius: 4px; padding: 5px;")
                 list_btn.clicked.connect(lambda checked, a=asset: self.list_asset(a))
                 action_layout.addWidget(list_btn)
                 
-            self.assets_table.setItem(row, 3, status_item)
-            self.assets_table.setCellWidget(row, 4, action_widget)
+            self.assets_table.setCellWidget(row, 6, action_widget)
             
         self.assets_table.resizeColumnsToContents()
+
+    # --- ACTIONS ---
+
+    def use_asset_action(self, asset):
+        """Action for clicking the 'Use Item' button with Quantity Spinner"""
+        user = auth_service.get_current_user()
+        if not user: return
+        
+        qty_owned = asset.get('quantity', 1)
+        use_qty = 1
+        
+        # If they own a stack, ask how many they want to consume!
+        if qty_owned > 1:
+            use_qty, ok = QInputDialog.getInt(
+                self, "Use Items", 
+                f"You have {qty_owned}x {asset['name']}.\nHow many do you want to use right now?", 
+                1, 1, qty_owned, 1
+            )
+            if not ok: return
+        else:
+            # Only have 1, just confirm
+            reply = QMessageBox.question(
+                self, 'Confirm Use', 
+                f"Are you sure you want to use your {asset['name']}?\n\nIf it has limited uses, it will consume 1 charge.", 
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes: return
+            
+        result = asset_service.use_user_asset(user.user_id, asset['instance_id'], use_qty)
+        if result['success']:
+            QMessageBox.information(self, "Used Item", result['message'])
+            self.refresh_data()
+        else:
+            QMessageBox.warning(self, "Error", result['message'])
 
     def collect_passive_income(self):
         user = auth_service.get_current_user()

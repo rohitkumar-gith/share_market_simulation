@@ -89,7 +89,18 @@ class UserDashboard(QWidget):
         self.top_companies_table.setStyleSheet("QTableWidget { background-color: #1E1E1E; border-radius: 8px; }")
         self.market_tabs.addTab(self.top_companies_table, "💎 Highest Valued")
         
-        # Right Tab 2: Trending by Volume
+        # Right Tab 2: Wealthiest Corporations (Net Worth)
+        self.wealthiest_corps_table = QTableWidget()
+        self.wealthiest_corps_table.setColumnCount(4)
+        self.wealthiest_corps_table.setHorizontalHeaderLabels(["Rank", "Ticker", "True Net Worth", "Physical Assets"])
+        self.wealthiest_corps_table.horizontalHeader().setStretchLastSection(True)
+        self.wealthiest_corps_table.setAlternatingRowColors(True)
+        self.wealthiest_corps_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.wealthiest_corps_table.verticalHeader().setDefaultSectionSize(45)
+        self.wealthiest_corps_table.setStyleSheet("QTableWidget { background-color: #1E1E1E; border-radius: 8px; }")
+        self.market_tabs.addTab(self.wealthiest_corps_table, "🏦 Wealthiest Corps")
+        
+        # Right Tab 3: Trending by Volume
         self.trending_table = QTableWidget()
         self.trending_table.setColumnCount(4)
         self.trending_table.setHorizontalHeaderLabels(["Ticker", "Price", "Volume", "Trend"])
@@ -157,13 +168,23 @@ class UserDashboard(QWidget):
             assets = db.execute_query("SELECT SUM(acquired_price) as asset_val FROM owned_assets WHERE owner_id = ? AND owner_type = 'USER'", (uid,))
             if assets and assets[0]['asset_val']:
                 total_assets += assets[0]['asset_val']
+                
+            # 3. Commodity Vault Value (Gold, Silver, etc)
+            vault = db.execute_query("""
+                SELECT SUM(uc.quantity * c.current_price) as vault_val 
+                FROM user_commodities uc 
+                JOIN commodities c ON uc.commodity_id = c.id 
+                WHERE uc.user_id = ?
+            """, (uid,))
+            if vault and vault[0]['vault_val']:
+                total_assets += vault[0]['vault_val']
 
-            # 3. Bank Debt
+            # 4. Bank Debt
             loans = db.execute_query("SELECT SUM(remaining_balance) as debt FROM loans WHERE user_id = ? AND status = 'active'", (uid,))
             if loans and loans[0]['debt']:
                 total_debt += loans[0]['debt']
 
-            # 4. Corporate Debt
+            # 5. Corporate Debt
             corp_loans = db.execute_query("SELECT SUM(remaining_balance) as corp_debt FROM company_user_loans WHERE borrower_user_id = ? AND status = 'ACTIVE'", (uid,))
             if corp_loans and corp_loans[0]['corp_debt']:
                 total_debt += corp_loans[0]['corp_debt']
@@ -272,7 +293,60 @@ class UserDashboard(QWidget):
                 
             self.top_companies_table.resizeColumnsToContents()
 
-        # --- 3. PROCESS TRENDING STOCKS ---
+        # --- 3. PROCESS WEALTHIEST CORPORATIONS (TRUE NET WORTH) ---
+        corps_query = """
+            SELECT c.ticker_symbol, c.company_name, c.company_wallet,
+                   (SELECT COALESCE(SUM(acquired_price), 0) FROM owned_assets WHERE owner_id = c.company_id AND owner_type = 'COMPANY') as asset_value,
+                   (SELECT COALESCE(SUM(remaining_balance), 0) FROM inter_company_loans WHERE borrower_company_id = c.company_id AND status = 'ACTIVE') as debt
+            FROM companies c
+        """
+        try:
+            corps_data = db.execute_query(corps_query) or []
+            
+            # FIX: Convert to standard dictionaries before doing math!
+            parsed_corps = []
+            for c in corps_data:
+                comp_dict = dict(c)
+                comp_dict['net_worth'] = comp_dict['company_wallet'] + comp_dict['asset_value'] - comp_dict['debt']
+                parsed_corps.append(comp_dict)
+                
+            # Sort by richest first using the new dictionaries
+            parsed_corps.sort(key=lambda x: x['net_worth'], reverse=True)
+            
+            self.wealthiest_corps_table.setRowCount(min(10, len(parsed_corps)))
+            for row in range(min(10, len(parsed_corps))):
+                comp = parsed_corps[row]
+                
+                rank_item = QTableWidgetItem(f"#{row + 1}")
+                rank_item.setFont(QFont('Arial', 11, QFont.Bold))
+                rank_item.setTextAlignment(Qt.AlignCenter)
+                if row == 0: rank_item.setForeground(QBrush(QColor("#D4AF37")))
+                elif row == 1: rank_item.setForeground(QBrush(QColor("#C0C0C0")))
+                elif row == 2: rank_item.setForeground(QBrush(QColor("#CD7F32")))
+                self.wealthiest_corps_table.setItem(row, 0, rank_item)
+                
+                t_item = QTableWidgetItem(comp['ticker_symbol'])
+                t_item.setFont(QFont('Arial', 11, QFont.Bold))
+                self.wealthiest_corps_table.setItem(row, 1, t_item)
+                
+                nw_item = QTableWidgetItem(Formatter.format_currency(comp['net_worth']))
+                nw_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                nw_item.setFont(QFont('Arial', 10, QFont.Bold))
+                if comp['net_worth'] >= 0:
+                    nw_item.setForeground(QBrush(QColor(Qt.green)))
+                else:
+                    nw_item.setForeground(QBrush(QColor(Qt.red)))
+                self.wealthiest_corps_table.setItem(row, 2, nw_item)
+                
+                asset_item = QTableWidgetItem(Formatter.format_currency(comp['asset_value']))
+                asset_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.wealthiest_corps_table.setItem(row, 3, asset_item)
+                
+            self.wealthiest_corps_table.resizeColumnsToContents()
+        except Exception as e:
+            print(f"Error loading wealthiest corps: {e}")
+
+        # --- 4. PROCESS TRENDING STOCKS ---
         trending = trading_service.get_trending_stocks(limit=10)
         self.trending_table.setRowCount(len(trending))
         

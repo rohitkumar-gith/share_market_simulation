@@ -4,7 +4,8 @@ Market Screen - Buy and Sell Shares & Player Marketplace
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
                              QTableWidget, QTableWidgetItem, QHeaderView, QListWidget, 
                              QListWidgetItem, QMessageBox, QTabWidget, QComboBox, 
-                             QDialog, QFormLayout, QSpinBox, QDoubleSpinBox, QDialogButtonBox)
+                             QDialog, QFormLayout, QSpinBox, QDoubleSpinBox, QDialogButtonBox,
+                             QInputDialog) # Ensure QInputDialog is available
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QBrush, QColor
 from services.auth_service import auth_service
@@ -308,7 +309,10 @@ class MarketScreen(QWidget):
             type_icon = "🏢 " if asset['asset_type'] == 'REAL_ESTATE' else "🏎️ "
             self.assets_table.setItem(row, 1, QTableWidgetItem(f"{type_icon}{asset['asset_type']}"))
             
-            self.assets_table.setItem(row, 2, QTableWidgetItem(asset['description']))
+            # Show availability in description if limited stock
+            avail_str = f"Stock: {asset.get('available_quantity', 'Infinite')}"
+            if asset.get('total_quantity', -1) == -1: avail_str = "Stock: Infinite"
+            self.assets_table.setItem(row, 2, QTableWidgetItem(avail_str))
             
             price_item = QTableWidgetItem(Formatter.format_currency(asset['base_price']))
             price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -384,15 +388,27 @@ class MarketScreen(QWidget):
         self.p2p_table.resizeColumnsToContents()
 
     def buy_official_asset(self, asset):
-        """Handle buying from system store"""
-        reply = QMessageBox.question(
-            self, 'Confirm Purchase',
-            f"Buy the {asset['name']} for {Formatter.format_currency(asset['base_price'])}?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        """Handle buying from system store with quantity selection"""
+        user = auth_service.get_current_user()
+        if not user: return
+        
+        # Determine max quantity they can buy based on stock limits
+        max_avail = asset.get('available_quantity', -1)
+        limit = max_avail if max_avail != -1 else 1000000 # Use a high limit if infinite
+        
+        if max_avail == 0:
+            QMessageBox.warning(self, "Out of Stock", f"Sorry, {asset['name']} is completely sold out!")
+            return
+
+        # Prompt user for quantity
+        qty, ok = QInputDialog.getInt(
+            self, "Purchase Quantity", 
+            f"How many {asset['name']}s do you want to buy?\n\nPrice per item: {Formatter.format_currency(asset['base_price'])}", 
+            1, 1, limit, 1
         )
-        if reply == QMessageBox.Yes:
-            user = auth_service.get_current_user()
-            result = asset_service.buy_asset_for_user(user.user_id, asset['asset_id'])
+        
+        if ok:
+            result = asset_service.buy_asset_for_user(user.user_id, asset['asset_id'], purchase_qty=qty)
             if result['success']:
                 QMessageBox.information(self, "Transaction Complete", result['message'])
                 self.refresh_data()

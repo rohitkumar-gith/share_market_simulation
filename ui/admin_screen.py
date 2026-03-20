@@ -142,7 +142,7 @@ class AdminScreen(QWidget):
         
         # Bot List
         self.bot_table = QTableWidget()
-        self.bot_table.setColumnCount(7) # Increased to 7 for Login Button
+        self.bot_table.setColumnCount(7) 
         self.bot_table.setHorizontalHeaderLabels(["Bot Name", "Strategy", "Wallet", "Portfolio", "Total Value", "Status", "Access"])
         self.bot_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.bot_table)
@@ -163,7 +163,7 @@ class AdminScreen(QWidget):
         return widget
 
     # ==========================================
-    # TAB 4: CREATE ASSET
+    # TAB 4: CREATE ASSET 
     # ==========================================
     def create_asset_tab(self):
         widget = QWidget()
@@ -178,8 +178,12 @@ class AdminScreen(QWidget):
         layout.addRow("Asset Name:", self.asset_name)
         
         self.asset_type = QComboBox()
-        self.asset_type.addItems(["CAR", "REAL_ESTATE"])
+        self.asset_type.addItems(["REAL_ESTATE", "CAR", "CONSUMABLE", "ITEM", "LUXURY"])
         layout.addRow("Type:", self.asset_type)
+        
+        self.asset_rarity = QComboBox()
+        self.asset_rarity.addItems(["Common", "Uncommon", "Rare", "Epic", "Legendary"])
+        layout.addRow("Rarity Tier:", self.asset_rarity)
         
         self.asset_price = QDoubleSpinBox()
         self.asset_price.setRange(0, 100000000)
@@ -188,13 +192,21 @@ class AdminScreen(QWidget):
         
         self.asset_revenue = QDoubleSpinBox()
         self.asset_revenue.setRange(0, 100000)
-        self.asset_revenue.setValue(500)
+        self.asset_revenue.setValue(0)
+        self.asset_revenue.setToolTip("Set to 0 if it's just an item and doesn't generate passive income.")
         layout.addRow("Revenue/Min (₹):", self.asset_revenue)
         
         self.asset_supply = QSpinBox()
-        self.asset_supply.setRange(-1, 10000)
-        self.asset_supply.setValue(100)
-        layout.addRow("Total Supply:", self.asset_supply)
+        self.asset_supply.setRange(-1, 100000)
+        self.asset_supply.setValue(-1)
+        self.asset_supply.setToolTip("Set to -1 for Infinite Stock")
+        layout.addRow("Total Quantity (-1 for Infinite):", self.asset_supply)
+        
+        self.asset_uses = QSpinBox()
+        self.asset_uses.setRange(-1, 1000)
+        self.asset_uses.setValue(-1)
+        self.asset_uses.setToolTip("How many times can this be used? (-1 for Infinite)")
+        layout.addRow("Max Uses (-1 for Infinite):", self.asset_uses)
         
         create_btn = QPushButton("Create Asset")
         create_btn.setStyleSheet(f"background-color: {config.COLOR_PRIMARY}; color: white;")
@@ -205,7 +217,7 @@ class AdminScreen(QWidget):
         return widget
 
     # ==========================================
-    # TAB 5: EDIT ASSETS
+    # TAB 5: EDIT ASSETS 
     # ==========================================
     def create_edit_asset_tab(self):
         """New Tab for Editing Assets"""
@@ -227,8 +239,12 @@ class AdminScreen(QWidget):
         layout.addRow("Asset Name:", self.edit_name)
         
         self.edit_type = QComboBox()
-        self.edit_type.addItems(["CAR", "REAL_ESTATE"])
+        self.edit_type.addItems(["REAL_ESTATE", "CAR", "CONSUMABLE", "ITEM", "LUXURY"])
         layout.addRow("Type:", self.edit_type)
+        
+        self.edit_rarity = QComboBox()
+        self.edit_rarity.addItems(["Common", "Uncommon", "Rare", "Epic", "Legendary"])
+        layout.addRow("Rarity Tier:", self.edit_rarity)
         
         self.edit_price = QDoubleSpinBox()
         self.edit_price.setRange(0, 100000000)
@@ -239,13 +255,26 @@ class AdminScreen(QWidget):
         layout.addRow("Revenue/Min (₹):", self.edit_revenue)
         
         self.edit_supply = QSpinBox()
-        self.edit_supply.setRange(-1, 10000)
-        layout.addRow("Total Supply:", self.edit_supply)
+        self.edit_supply.setRange(-1, 100000)
+        layout.addRow("Total Quantity (-1 for Infinite):", self.edit_supply)
         
+        self.edit_uses = QSpinBox()
+        self.edit_uses.setRange(-1, 1000)
+        layout.addRow("Max Uses (-1 for Infinite):", self.edit_uses)
+        
+        # --- NEW BUTTONS SECTION ---
         update_btn = QPushButton("Update Asset")
-        update_btn.setStyleSheet(f"background-color: {config.COLOR_WARNING}; color: black;")
+        update_btn.setStyleSheet(f"background-color: {config.COLOR_WARNING}; color: black; font-weight: bold;")
         update_btn.clicked.connect(self.update_asset)
-        layout.addRow(update_btn)
+        
+        delete_btn = QPushButton("Delete Asset (Wipe from Server)")
+        delete_btn.setStyleSheet(f"background-color: {config.COLOR_DANGER}; color: white; font-weight: bold;")
+        delete_btn.clicked.connect(self.delete_asset)
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(update_btn)
+        btn_layout.addWidget(delete_btn)
+        layout.addRow(btn_layout)
         
         widget.setLayout(layout)
         return widget
@@ -257,8 +286,6 @@ class AdminScreen(QWidget):
     def trigger_event(self, event_type):
         """Trigger global market event with Percentage Popup"""
         minutes = self.duration_spin.value()
-        
-        # Ask for Target Percentage
         default_percent = 20.0 if event_type == 'bull' else -20.0
         
         target_percent, ok = QInputDialog.getDouble(
@@ -267,16 +294,11 @@ class AdminScreen(QWidget):
             f"Enter target change % for {event_type.upper()} run:", 
             default_percent, -90, 500, 1
         )
-        
         if not ok: return
         
-        # Call service with ALL required arguments
         result = admin_service.trigger_market_event(event_type, minutes, target_percent)
-        
-        if result['success']:
-            QMessageBox.information(self, "Success", result['message'])
-        else:
-            QMessageBox.warning(self, "Error", result['message'])
+        if result['success']: QMessageBox.information(self, "Success", result['message'])
+        else: QMessageBox.warning(self, "Error", result['message'])
 
     def apply_manipulation(self):
         """Apply targeted price change"""
@@ -290,54 +312,82 @@ class AdminScreen(QWidget):
             QMessageBox.information(self, "Info", "0% change selected.")
             return
 
-        # Determine direction
-        final_percent = percent
-        if "Decrease" in action:
-            final_percent = -percent
-            
+        final_percent = -percent if "Decrease" in action else percent
         result = admin_service.manipulate_specific_company(company_id, final_percent)
         
-        if result['success']:
-            QMessageBox.information(self, "Success", result['message'])
-        else:
-            QMessageBox.warning(self, "Error", result['message'])
+        if result['success']: QMessageBox.information(self, "Success", result['message'])
+        else: QMessageBox.warning(self, "Error", result['message'])
 
     def create_asset(self):
         name = self.asset_name.text()
         if not name: return
         
-        user = auth_service.get_current_user()
-        result = admin_service.create_master_asset(
-            user.user_id, name, self.asset_type.currentText(),
-            self.asset_price.value(), self.asset_revenue.value(), self.asset_supply.value()
+        result = asset_service.create_master_asset(
+            name, 
+            self.asset_type.currentText(),
+            self.asset_price.value(), 
+            self.asset_revenue.value(), 
+            self.asset_supply.value(),     
+            self.asset_rarity.currentText(), 
+            self.asset_uses.value()        
         )
         
         if result['success']:
             QMessageBox.information(self, "Success", result['message'])
             self.asset_name.clear()
-            self.load_assets_for_edit() # Refresh edit list
+            self.load_assets_for_edit()
         else:
             QMessageBox.warning(self, "Error", result['message'])
 
+    # --- NEW SYNC & DELETE LOGIC ---
     def update_asset(self):
         if self.edit_asset_selector.currentIndex() == -1: return
         
         asset_id = self.edit_asset_selector.currentData()
         name = self.edit_name.text()
-        
         if not name: return
         
-        user = auth_service.get_current_user()
-        result = admin_service.edit_master_asset(
-            user.user_id, asset_id, name, self.edit_type.currentText(),
-            self.edit_price.value(), self.edit_revenue.value(), self.edit_supply.value()
-        )
+        try:
+            new_uses = self.edit_uses.value()
+            db.execute_update("""
+                UPDATE master_assets 
+                SET name=?, asset_type=?, base_price=?, revenue_rate=?, total_quantity=?, rarity=?, max_uses=?
+                WHERE asset_id=?
+            """, (
+                name, 
+                self.edit_type.currentText(), 
+                self.edit_price.value(), 
+                self.edit_revenue.value(), 
+                self.edit_supply.value(),
+                self.edit_rarity.currentText(),
+                new_uses,
+                asset_id
+            ))
+            
+            # THE FIX: Force sync the max_uses to all players who already own it!
+            asset_service.sync_master_asset_update(asset_id, new_uses)
+            
+            QMessageBox.information(self, "Success", "Asset updated and synced to all players successfully!")
+            self.load_assets_for_edit()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", str(e))
+
+    def delete_asset(self):
+        if self.edit_asset_selector.currentIndex() == -1: return
         
-        if result['success']:
-            QMessageBox.information(self, "Success", result['message'])
-            self.load_assets_for_edit() # Refresh list
-        else:
-            QMessageBox.warning(self, "Error", result['message'])
+        asset_id = self.edit_asset_selector.currentData()
+        name = self.edit_name.text()
+        
+        reply = QMessageBox.question(self, 'NUKE ASSET', f"Are you sure you want to completely delete {name}?\n\nThis will remove it from the store AND forcefully delete it from every player's inventory!", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        
+        if reply == QMessageBox.Yes:
+            result = asset_service.delete_master_asset(asset_id)
+            if result['success']:
+                QMessageBox.information(self, "Deleted", result['message'])
+                self.load_assets_for_edit()
+                self.edit_name.clear()
+            else:
+                QMessageBox.warning(self, "Error", result['message'])
 
     # --- Loaders ---
 
@@ -359,13 +409,11 @@ class AdminScreen(QWidget):
             role = "Admin" if user['is_admin'] else "User"
             self.user_table.setItem(row, 3, QTableWidgetItem(role))
             
-            # Add Fund Button (+ 10k)
             btn_add = QPushButton("+ ₹10k")
             btn_add.setStyleSheet("color: green; font-weight: bold;")
             btn_add.clicked.connect(lambda checked, u=user: self.add_funds_to_user(u))
             self.user_table.setCellWidget(row, 4, btn_add)
 
-            # Remove Fund Button (- 10k)
             btn_remove = QPushButton("- ₹10k")
             btn_remove.setStyleSheet("color: red; font-weight: bold;")
             btn_remove.clicked.connect(lambda checked, u=user: self.remove_funds_from_user(u))
@@ -402,7 +450,6 @@ class AdminScreen(QWidget):
                 status = "Active" if bot['is_active'] else "Inactive"
                 self.bot_table.setItem(row, 5, QTableWidgetItem(status))
                 
-                # --- NEW LOGIN BUTTON ---
                 btn_login = QPushButton("👁️ Login")
                 btn_login.setStyleSheet("background-color: #3498DB; color: white; font-weight: bold;")
                 username = bot['bot_name'].replace(" ", "") + "Bot"
@@ -416,7 +463,6 @@ class AdminScreen(QWidget):
             print(f"Error loading bots: {e}")
 
     def switch_to_user(self, user_id):
-        """Switch session to the selected bot"""
         success = auth_service.login_as_user(user_id)
         if success:
             if self.window():
@@ -435,7 +481,6 @@ class AdminScreen(QWidget):
             QMessageBox.warning(self, "Error", str(e))
 
     def load_assets_for_edit(self):
-        """Populate the Edit Asset dropdown"""
         self.edit_asset_selector.blockSignals(True)
         self.edit_asset_selector.clear()
         assets = asset_service.get_all_assets()
@@ -443,12 +488,10 @@ class AdminScreen(QWidget):
             self.edit_asset_selector.addItem(f"{a['name']} ({a['asset_type']})", a['asset_id'])
         self.edit_asset_selector.blockSignals(False)
         
-        # Load first item details if available
         if self.edit_asset_selector.count() > 0:
             self.load_asset_details()
 
     def load_asset_details(self):
-        """Fill inputs with selected asset data"""
         if self.edit_asset_selector.currentIndex() == -1: return
         
         asset_id = self.edit_asset_selector.currentData()
@@ -461,29 +504,19 @@ class AdminScreen(QWidget):
             idx = self.edit_type.findText(target_asset['asset_type'])
             if idx >= 0: self.edit_type.setCurrentIndex(idx)
             
+            rarity_idx = self.edit_rarity.findText(target_asset.get('rarity', 'Common'))
+            if rarity_idx >= 0: self.edit_rarity.setCurrentIndex(rarity_idx)
+            
             self.edit_price.setValue(target_asset['base_price'])
             self.edit_revenue.setValue(target_asset['revenue_rate'])
-            self.edit_supply.setValue(target_asset['total_supply'])
+            
+            self.edit_supply.setValue(target_asset.get('total_quantity', -1))
+            self.edit_uses.setValue(target_asset.get('max_uses', -1))
 
     def refresh_data(self):
-        """Called by main window when tab is switched"""
-        # --- FIX: SMART REFRESH ---
-        # Only refresh specific parts based on active tab to prevent resetting user inputs
         current_tab_index = self.tabs.currentIndex()
-        
-        # Tab 0: Market Control
-        # Tab 1: User Management
-        # Tab 2: Bot Control
-        # Tab 3: Create Asset
-        # Tab 4: Edit Assets
-        
-        # Always refresh read-only tables
         self.refresh_users()
         self.refresh_bots()
         
-        # Only refresh input combos if their tab is NOT active
-        if current_tab_index != 0:
-            self.refresh_company_combo()
-            
-        if current_tab_index != 4:
-            self.load_assets_for_edit()
+        if current_tab_index != 0: self.refresh_company_combo()
+        if current_tab_index != 4: self.load_assets_for_edit()
