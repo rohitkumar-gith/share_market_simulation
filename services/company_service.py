@@ -5,6 +5,7 @@ from database.db_manager import db
 from models.company import Company
 from models.user import User
 from models.transaction import Transaction
+from utils.formatters import Formatter
 
 class CompanyService:
     
@@ -94,17 +95,60 @@ class CompanyService:
     # ==========================
     
     def create_company(self, user_id, name, ticker, price, total_shares, description):
+        """Creates a new company and forces the founder to buy a 30% initial stake"""
         try:
+            user = User.get_by_id(user_id)
+            if not user:
+                return {'success': False, 'message': 'User not found.'}
+
+            # 1. Calculate the mandatory 30% Founder's Stake
+            founder_shares = int(total_shares * 0.30)
+            required_capital = founder_shares * price
+            
+            # The remaining shares go to the open market (IPO)
+            market_shares = total_shares - founder_shares
+
+            # 2. Check if the user can afford the 30% stake
+            if user.wallet_balance < required_capital:
+                return {
+                    'success': False, 
+                    'message': f'Insufficient funds! You need {Formatter.format_currency(required_capital)} to buy the mandatory 30% founder stake ({founder_shares:,} shares).'
+                }
+
+            # 3. Deduct funds from the user
+            new_user_balance = user.wallet_balance - required_capital
+            db.execute_update("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (new_user_balance, user_id))
+
+            # 4. Create the Company
             company = Company.create(user_id, name, ticker, price, total_shares, description)
-            # Give the creator the initial shares so they are actually the owner
-            initial_shares = int(total_shares * 0.10) # Give founder 10% to start
-            if initial_shares > 0:
-                from services.trading_service import trading_service
-                db.execute_update("UPDATE companies SET available_shares = available_shares - ? WHERE company_id = ?", (initial_shares, company.company_id))
-                db.execute_insert("INSERT INTO user_holdings (user_id, company_id, quantity, average_buy_price) VALUES (?, ?, ?, ?)", (user_id, company.company_id, initial_shares, price))
-            return {'success': True, 'message': f"Company {name} ({ticker}) created! You were granted {initial_shares:,} founder shares."}
+            
+            # Update the company with the proper wallet and available market shares
+            db.execute_update(
+                "UPDATE companies SET available_shares = ?, company_wallet = ? WHERE company_id = ?", 
+                (market_shares, required_capital, company.company_id)
+            )
+
+            # 5. Instantly give the user their 30% shares --- (BUG FIXED HERE: Added total_invested)
+            db.execute_insert('''
+                INSERT INTO user_holdings (user_id, company_id, quantity, average_buy_price, total_invested)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (user_id, company.company_id, founder_shares, price, required_capital))
+
+            # 6. Log the personal and corporate transactions
+            db.execute_insert(
+                "INSERT INTO wallet_transactions (user_id, transaction_type, amount, balance_after, description) VALUES (?, 'EXPENSE', ?, ?, ?)",
+                (user_id, required_capital, new_user_balance, f"IPO Founder Stake: 30% of {ticker}")
+            )
+            
+            db.execute_insert(
+                "INSERT INTO company_wallet_transactions (company_id, transaction_type, amount, balance_after, description) VALUES (?, 'REVENUE', ?, ?, ?)",
+                (company.company_id, required_capital, required_capital, f"Initial IPO Funding from Founder")
+            )
+
+            return {'success': True, 'message': f"Company created! You secured your 30% stake ({founder_shares:,} shares) for {Formatter.format_currency(required_capital)}."}
+
         except Exception as e:
-            return {'success': False, 'message': str(e)}
+            return {'success': False, 'message': f"Failed to create company: {str(e)}"}
 
     def get_user_companies(self, user_id):
         # Always check for hostile takeovers before loading the dashboard!

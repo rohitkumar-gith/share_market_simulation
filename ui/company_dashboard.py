@@ -13,7 +13,7 @@ import config
 class CreateCompanyDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Start New Company")
+        self.setWindowTitle("Start New Company (IPO)")
         self.setFixedWidth(400)
         self.init_ui()
         
@@ -32,12 +32,14 @@ class CreateCompanyDialog(QDialog):
         self.price_input = QDoubleSpinBox()
         self.price_input.setRange(1.0, 10000.0)
         self.price_input.setValue(100.0)
+        self.price_input.valueChanged.connect(self.update_cost_calculator) # Live update
         form.addRow("IPO Share Price:", self.price_input)
         
         self.shares_input = QSpinBox()
         self.shares_input.setRange(1000, 10000000)
         self.shares_input.setValue(100000)
         self.shares_input.setSingleStep(1000)
+        self.shares_input.valueChanged.connect(self.update_cost_calculator) # Live update
         form.addRow("Total Shares:", self.shares_input)
         
         self.desc_input = QTextEdit()
@@ -45,16 +47,44 @@ class CreateCompanyDialog(QDialog):
         form.addRow("Description:", self.desc_input)
         
         layout.addLayout(form)
-        self.cost_label = QLabel("IPO Listing Fee: ₹5,000")
-        self.cost_label.setStyleSheet("color: #888; font-style: italic;")
-        layout.addWidget(self.cost_label)
+        
+        # --- NEW: Mandatory 30% Stake Calculator UI ---
+        calc_box = QGroupBox("Required Founder's Investment (30% Stake)")
+        calc_box.setStyleSheet("QGroupBox { border: 1px solid #E67E22; border-radius: 5px; margin-top: 10px; }")
+        calc_layout = QVBoxLayout()
+        
+        self.stake_info_lbl = QLabel("You must purchase 30% of the company at IPO.")
+        self.stake_info_lbl.setStyleSheet("color: #888; font-size: 12px;")
+        calc_layout.addWidget(self.stake_info_lbl)
+        
+        self.total_cost_lbl = QLabel("Required Capital: ₹0.00")
+        self.total_cost_lbl.setFont(QFont('Arial', 12, QFont.Bold))
+        self.total_cost_lbl.setStyleSheet("color: #E67E22;")
+        self.total_cost_lbl.setAlignment(Qt.AlignCenter)
+        calc_layout.addWidget(self.total_cost_lbl)
+        
+        calc_box.setLayout(calc_layout)
+        layout.addWidget(calc_box)
         
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
+        
         self.setLayout(layout)
-    
+        self.update_cost_calculator() # Run once on load
+        
+    def update_cost_calculator(self):
+        """Dynamically calculates the 30% cost as the user types"""
+        total_shares = self.shares_input.value()
+        price = self.price_input.value()
+        
+        founder_shares = int(total_shares * 0.30)
+        required_capital = founder_shares * price
+        
+        self.stake_info_lbl.setText(f"You will receive {Formatter.format_number(founder_shares)} shares.")
+        self.total_cost_lbl.setText(f"Required Capital: {Formatter.format_currency(required_capital)}")
+
     def get_data(self):
         return (self.name_input.text(), self.ticker_input.text(), self.price_input.value(), self.shares_input.value(), self.desc_input.toPlainText())
 
@@ -120,7 +150,7 @@ class CompanyDashboard(QWidget):
         self.tabs.addTab(self.create_finance_tab(), "💰 Finance & Dividends")
         self.tabs.addTab(self.create_ops_tab(), "🏭 Assets") 
         self.tabs.addTab(self.create_lending_tab(), "🏦 Corporate Lending")
-        self.tabs.addTab(self.create_shareholders_tab(), "👥 Shareholders") # NEW TAB
+        self.tabs.addTab(self.create_shareholders_tab(), "👥 Shareholders")
         self.tabs.addTab(self.create_settings_tab(), "⚙️ Settings")
         
         details_layout.addWidget(self.tabs)
@@ -415,6 +445,7 @@ class CompanyDashboard(QWidget):
                 self.go_back()
             else:
                 self.load_company_details(self.current_company_id)
+
     def load_company_details(self, company_id):
         data = company_service.get_company_financial_summary(company_id)
         details = company_service.get_company_details(company_id)
@@ -461,7 +492,6 @@ class CompanyDashboard(QWidget):
         current_user = auth_service.get_current_user()
         
         for row, holder in enumerate(shareholders):
-            # FIX: Convert SQLite Row to a standard Python dictionary
             h_dict = dict(holder)
             
             rank_item = QTableWidgetItem(f"#{row + 1}")
@@ -478,7 +508,6 @@ class CompanyDashboard(QWidget):
             shares_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.shareholders_table.setItem(row, 2, shares_item)
             
-            # Now .get() will work perfectly!
             total_issued = h_dict.get('total_issued_shares') or 1 
             percent = (h_dict['quantity'] / total_issued) * 100 if total_issued > 0 else 0
             
@@ -490,7 +519,6 @@ class CompanyDashboard(QWidget):
             status_item = QTableWidgetItem(status)
             if row == 0: status_item.setForeground(QBrush(QColor("#D4AF37"))) # Gold for owner
             self.shareholders_table.setItem(row, 4, status_item)
-   
 
     def refresh_lending_tab(self):
         if not self.current_company_id: return
@@ -598,12 +626,21 @@ class CompanyDashboard(QWidget):
         if dialog.exec_() == QDialog.Accepted:
             name, ticker, price, shares, desc = dialog.get_data()
             user = auth_service.get_current_user()
-            if user.wallet_balance < 5000: return QMessageBox.warning(self, "Error", "Insufficient funds (₹5,000)")
+            
+            # --- NEW: Check if they can afford the 30% stake before sending to the backend ---
+            founder_shares = int(shares * 0.30)
+            required_capital = founder_shares * price
+            
+            if user.wallet_balance < required_capital: 
+                return QMessageBox.warning(self, "Error", f"Insufficient funds. You need {Formatter.format_currency(required_capital)} for the mandatory 30% founder stake.")
+            
             res = company_service.create_company(user.user_id, name, ticker, price, shares, desc)
             if res['success']:
-                user.withdraw_funds(5000, f"Listing Fee")
+                # The wallet is now deducted dynamically in the backend based on the 30% stake!
+                QMessageBox.information(self, "Success", res['message'])
                 self.refresh_data()
-            else: QMessageBox.warning(self, "Error", res['message'])
+            else: 
+                QMessageBox.warning(self, "Error", res['message'])
 
     def open_company_details(self, item):
         self.current_company_id = item.data(Qt.UserRole)
