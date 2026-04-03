@@ -62,7 +62,9 @@ class BotTrader:
             strategy = strategies[i % len(strategies)]
             
             # Whales need more starting capital to manipulate the market
-            initial_balance = config.BOT_INITIAL_BALANCE * 5 if strategy == BOT_STRATEGY_WHALE else config.BOT_INITIAL_BALANCE
+            # Giving all bots a much higher baseline starting cash!
+            base_cash = max(config.BOT_INITIAL_BALANCE, 1000000) 
+            initial_balance = base_cash * 5 if strategy == BOT_STRATEGY_WHALE else base_cash
 
             bot_user = User.get_by_username(username)
             if not bot_user:
@@ -78,8 +80,7 @@ class BotTrader:
                     continue
             
             # Update user balance for whales
-            if strategy == BOT_STRATEGY_WHALE:
-                db.execute_update("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (initial_balance, bot_user.user_id))
+            db.execute_update("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (initial_balance, bot_user.user_id))
             
             try:
                 bot_id = db.execute_insert(
@@ -166,6 +167,19 @@ class BotTrader:
         bot_user = User.get_by_id(bot['user_id'])
         if not bot_user: return False
         
+        # --- INSTITUTIONAL BAILOUT (QUANTITATIVE EASING) ---
+        # If the bot drops below ₹50,000, inject ₹500,000 of fresh capital
+        if bot_user.wallet_balance < 50000:
+            bailout_amount = 500000
+            new_balance = bot_user.wallet_balance + bailout_amount
+            db.execute_update("UPDATE users SET wallet_balance = ? WHERE user_id = ?", (new_balance, bot_user.user_id))
+            db.execute_insert(
+                "INSERT INTO wallet_transactions (user_id, transaction_type, amount, balance_after, description) VALUES (?, 'REVENUE', ?, ?, ?)",
+                (bot_user.user_id, bailout_amount, new_balance, "Institutional Capital Injection")
+            )
+            bot_user.wallet_balance = new_balance # Update local object for the rest of the turn
+        # ---------------------------------------------------
+
         # Check Global Admin Trend
         is_crash = (market_engine.trend_type == 'bear' and datetime.now() < market_engine.trend_end_time)
         is_bull_run = (market_engine.trend_type == 'bull' and datetime.now() < market_engine.trend_end_time)
@@ -202,26 +216,20 @@ class BotTrader:
     
     def _get_market_sentiment(self, company_id):
         """Analyze recent price trend using Technical Analysis (Moving Averages)."""
-        # 1. Check Global Admin Event First
         if datetime.now() < market_engine.trend_end_time:
             if market_engine.trend_type == 'bull': return 'bull', 10.0
             if market_engine.trend_type == 'bear': return 'bear', -10.0
 
-        # 2. Technical Analysis: Short vs Long Moving Averages
         try:
-            # Get last 20 price points
             history = market_engine.get_price_history(company_id, limit=20)
             if len(history) >= 10:
                 short_sma = sum(h['price'] for h in history[-5:]) / 5
                 long_sma = sum(h['price'] for h in history[-10:]) / 10
                 change = ((short_sma - long_sma) / long_sma) * 100
                 
-                # Golden Cross (Bullish)
                 if short_sma > long_sma * 1.01: return 'bull', change
-                # Death Cross (Bearish)
                 if short_sma < long_sma * 0.99: return 'bear', change
                 
-            # Fallback to older 1-hour change logic if not enough history
             data = market_engine.get_price_change(company_id, hours=1) 
             change = data.get('change_percent', 0)
             if change >= 2.0: return 'bull', change
@@ -232,7 +240,7 @@ class BotTrader:
             return 'neutral', 0
 
     def _bot_buy_shares(self, bot_user, companies, strategy):
-        """Smart Buying Logic"""
+        """Smart Buying Logic with Position Sizing"""
         company_data = self._select_company_to_buy(companies, strategy)
         if not company_data: return False
         
@@ -245,16 +253,21 @@ class BotTrader:
         is_crash = (market_engine.trend_type == 'bear' and datetime.now() < market_engine.trend_end_time)
         is_bull = (market_engine.trend_type == 'bull' and datetime.now() < market_engine.trend_end_time)
 
-        # Quantity Logic based on Strategy
-        max_affordable = int(bot_user.wallet_balance / company.share_price)
-        if max_affordable < 1: return False
+        # --- POSITION SIZING LOGIC (The 10% Rule) ---
+        # Whales can spend up to 25% of their wallet, Normal bots only 10%
+        max_spend_percent = 0.25 if strategy == BOT_STRATEGY_WHALE else 0.10
+        allocated_cash = bot_user.wallet_balance * max_spend_percent
+        
+        # Calculate max shares they can afford with their allocated budget, NOT their full wallet
+        max_affordable = int(allocated_cash / company.share_price)
+        
+        if max_affordable < 1: return False # Cannot afford even 1 share with their budget
         
         if strategy == BOT_STRATEGY_WHALE:
             quantity = random.randint(max(1, int(max_affordable * 0.5)), max_affordable)
         elif strategy == BOT_STRATEGY_VALUE and sentiment != 'bear':
             quantity = random.randint(max(1, int(max_affordable * 0.2)), int(max_affordable * 0.5))
         elif strategy == BOT_STRATEGY_INCOME and active_dividend:
-            # Income investors dump majority of cash into dividend stocks
             quantity = random.randint(max(1, int(max_affordable * 0.6)), max_affordable)
         else:
             quantity = random.randint(1, min(max_affordable, 100))
@@ -263,7 +276,6 @@ class BotTrader:
         if is_crash:
             price_multiplier = random.uniform(0.75, 0.85) # Vulture bid
         elif active_dividend:
-            # Aggressively overpay to secure shares before dividend snapshot
             price_multiplier = random.uniform(1.05, 1.15)
         elif is_bull or strategy == BOT_STRATEGY_WHALE:
             price_multiplier = random.uniform(1.05, 1.15)
@@ -279,7 +291,6 @@ class BotTrader:
         # --- EXECUTE ---
         success = False
         
-        # 1. Secondary Market
         best_sell_order = db.execute_query(
             "SELECT * FROM share_orders WHERE company_id = ? AND order_type = 'sell' AND status = 'pending' ORDER BY price_per_share ASC LIMIT 1",
             (company.company_id,)
@@ -296,14 +307,12 @@ class BotTrader:
                     success = True
                 except: pass
 
-        # 2. IPO
         if not success and company.available_shares >= quantity and not is_crash:
             try:
                 Share.buy_from_ipo(bot_user.user_id, company.company_id, quantity)
                 success = True
             except: pass
 
-        # 3. Limit Order
         if not success:
             try:
                 from services.trading_service import trading_service
@@ -311,7 +320,6 @@ class BotTrader:
                 success = True
             except: pass
             
-        # Social Interaction
         if success:
             msg = None
             if active_dividend and strategy in [BOT_STRATEGY_INCOME, BOT_STRATEGY_WHALE]:
@@ -338,8 +346,6 @@ class BotTrader:
 
         active_dividend = self._get_active_dividend(company.company_id)
         
-        # DIAMOND HANDS FOR DIVIDENDS
-        # If a dividend is declared, bots REFUSE to sell unless they are panicking
         if active_dividend and strategy != BOT_STRATEGY_PANIC:
             return False
 
@@ -348,7 +354,6 @@ class BotTrader:
         is_crash = (market_engine.trend_type == 'bear' and datetime.now() < market_engine.trend_end_time)
         is_bull = (market_engine.trend_type == 'bull' and datetime.now() < market_engine.trend_end_time)
 
-        # RISK MANAGEMENT (Stop-Loss / Take-Profit)
         avg_buy_price = holding['average_buy_price']
         current_price = company.share_price
         pl_percent = ((current_price - avg_buy_price) / avg_buy_price) * 100 if avg_buy_price > 0 else 0
@@ -357,25 +362,22 @@ class BotTrader:
         chat_msg = None
 
         if strategy == BOT_STRATEGY_PANIC and pl_percent < -2.0:
-            force_sell = True # Panic seller dumps at slightest drop
+            force_sell = True 
             chat_msg = f"Getting out of ${company.ticker_symbol} immediately! It's crashing! 📉"
         elif pl_percent < -10.0:
-            force_sell = True # Universal Stop-Loss
+            force_sell = True 
         elif pl_percent > 20.0 and strategy not in [BOT_STRATEGY_VALUE, BOT_STRATEGY_INCOME]:
-            force_sell = True # Take-Profit (Value/Income investors hold longer)
+            force_sell = True 
             if pl_percent > 50.0:
                 chat_msg = f"Taking massive profits on ${company.ticker_symbol} (+{round(pl_percent)}%). Thanks for the liquidity! 💰"
 
         if not force_sell and not is_crash and random.random() > 0.3:
-            return False # Decide to hold 70% of the time if no forced condition
+            return False 
 
-        # --- PRICING LOGIC ---
         if is_crash or force_sell:
-            # Undercut market to get out FAST
             price_multiplier = random.uniform(0.80, 0.95)
-            quantity = holding['quantity'] # Dump all
+            quantity = holding['quantity']
         elif is_bull:
-            # Greed
             price_multiplier = random.uniform(1.10, 1.20)
             quantity = max(1, int(holding['quantity'] * 0.1))
         elif sentiment == 'bull':
@@ -387,10 +389,8 @@ class BotTrader:
 
         sell_price = round(company.share_price * price_multiplier, 2)
         
-        # --- EXECUTE ---
         success = False
         
-        # 1. Match User Buys (Exit Liquidity)
         best_buy_order = db.execute_query(
             "SELECT * FROM share_orders WHERE company_id = ? AND order_type = 'buy' AND status = 'pending' ORDER BY price_per_share DESC LIMIT 1",
             (company.company_id,)
@@ -401,7 +401,7 @@ class BotTrader:
             buyer_price = buy_order['price_per_share']
             
             acceptable_price = sell_price
-            if is_crash or force_sell: acceptable_price = company.share_price * 0.60 # Desperate
+            if is_crash or force_sell: acceptable_price = company.share_price * 0.60 
             
             if buyer_price >= acceptable_price:
                 sell_qty = min(quantity, buy_order['quantity'])
@@ -411,7 +411,6 @@ class BotTrader:
                     success = True
                 except: pass
 
-        # 2. Limit Sell Order
         if not success:
             try:
                 from services.trading_service import trading_service
@@ -428,7 +427,6 @@ class BotTrader:
         """Select company based on strategy"""
         if not companies: return None
         
-        # INCOME Strategy prioritizes dividend stocks above all else
         if strategy == BOT_STRATEGY_INCOME:
             dividend_companies = [c for c in companies if self._get_active_dividend(c.company_id)]
             if dividend_companies:
@@ -438,13 +436,11 @@ class BotTrader:
             return random.choice(companies)
             
         elif strategy == BOT_STRATEGY_MOMENTUM or strategy == BOT_STRATEGY_WHALE:
-            # Both Whales and Momentum traders look for high movement/priced stocks
             sorted_companies = sorted(companies, key=lambda c: c.share_price, reverse=True)
             weights = [1.0 / (i + 1) for i in range(len(sorted_companies))]
             return random.choices(sorted_companies, weights=weights)[0]
             
         elif strategy == BOT_STRATEGY_VALUE or strategy == BOT_STRATEGY_INCOME:
-            # Value (and Income fallback) looks for undervalued (cheaper) stocks
             sorted_companies = sorted(companies, key=lambda c: c.share_price)
             weights = [1.0 / (i + 1) for i in range(len(sorted_companies))]
             return random.choices(sorted_companies, weights=weights)[0]
